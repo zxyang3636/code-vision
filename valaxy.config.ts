@@ -19,6 +19,18 @@ export default defineValaxyConfig<UserThemeConfig>({
     },
 
     pages: [
+      {
+        name: "分类",
+        url: "/categories/",
+        icon: "i-ri-apps-line",
+        color: "dodgerblue",
+      },
+      {
+        name: "标签",
+        url: "/tags/",
+        icon: "i-ri-bookmark-3-line",
+        color: "dodgerblue",
+      },
       // {
       //   name: '我的小伙伴们',
       //   url: '/links/',

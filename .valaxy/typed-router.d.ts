@@ -31,9 +31,17 @@ declare module 'vue-router/auto-routes' {
     '/posts/docker-s': RouteRecordInfo<'/posts/docker-s', '/posts/docker-s', Record<never, never>, Record<never, never>>,
     '/posts/elastic-search': RouteRecordInfo<'/posts/elastic-search', '/posts/elastic-search', Record<never, never>, Record<never, never>>,
     '/posts/fragment-a': RouteRecordInfo<'/posts/fragment-a', '/posts/fragment-a', Record<never, never>, Record<never, never>>,
+    '/posts/java-threadPool': RouteRecordInfo<'/posts/java-threadPool', '/posts/java-threadPool', Record<never, never>, Record<never, never>>,
+    '/posts/javase-mianshi': RouteRecordInfo<'/posts/javase-mianshi', '/posts/javase-mianshi', Record<never, never>, Record<never, never>>,
     '/posts/mysql-aa': RouteRecordInfo<'/posts/mysql-aa', '/posts/mysql-aa', Record<never, never>, Record<never, never>>,
+    '/posts/mysql-mianshi': RouteRecordInfo<'/posts/mysql-mianshi', '/posts/mysql-mianshi', Record<never, never>, Record<never, never>>,
+    '/posts/rabbitmq-a': RouteRecordInfo<'/posts/rabbitmq-a', '/posts/rabbitmq-a', Record<never, never>, Record<never, never>>,
+    '/posts/spring-cloud': RouteRecordInfo<'/posts/spring-cloud', '/posts/spring-cloud', Record<never, never>, Record<never, never>>,
+    '/posts/spring-mj': RouteRecordInfo<'/posts/spring-mj', '/posts/spring-mj', Record<never, never>, Record<never, never>>,
     '/posts/vue3-project': RouteRecordInfo<'/posts/vue3-project', '/posts/vue3-project', Record<never, never>, Record<never, never>>,
     '/posts/vue3-s': RouteRecordInfo<'/posts/vue3-s', '/posts/vue3-s', Record<never, never>, Record<never, never>>,
+    '/posts/xiaoxi-socket': RouteRecordInfo<'/posts/xiaoxi-socket', '/posts/xiaoxi-socket', Record<never, never>, Record<never, never>>,
+    '/posts/xxl-job': RouteRecordInfo<'/posts/xxl-job', '/posts/xxl-job', Record<never, never>, Record<never, never>>,
     '/tags/': RouteRecordInfo<'/tags/', '/tags', Record<never, never>, Record<never, never>>,
   }
 }

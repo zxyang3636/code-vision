@@ -135,7 +135,7 @@ export default defineSiteConfig({
     methods: [
       {
         name: "支付宝",
-        url: "https://cdn.yunyoujun.cn/img/donate/alipay-qrcode.jpg",
+        url: "https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20250721231234_45.jpg",
         color: "#00A3EE",
         icon: "i-ri-alipay-line",
       },
@@ -147,7 +147,7 @@ export default defineSiteConfig({
       // },
       {
         name: "微信支付",
-        url: "https://cdn.yunyoujun.cn/img/donate/wechatpay-qrcode.jpg",
+        url: "https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20250721231234_46.jpg",
         color: "#2DC100",
         icon: "i-ri-wechat-pay-line",
       },

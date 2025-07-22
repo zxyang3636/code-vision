@@ -32,12 +32,12 @@ export default defineValaxyConfig<UserThemeConfig>({
         icon: "i-ri-bookmark-3-line",
         color: "dodgerblue",
       },
-      // {
-      //   name: '我的小伙伴们',
-      //   url: '/links/',
-      //   icon: 'i-ri-genderless-line',
-      //   color: 'dodgerblue',
-      // },
+      {
+        name: '我的小伙伴们',
+        url: '/links/',
+        icon: 'i-ri-group-fill',
+        color: 'dodgerblue',
+      },
       // {
       //   name: '喜欢的女孩子',
       //   url: '/girls/',
@@ -72,7 +72,7 @@ export default defineValaxyConfig<UserThemeConfig>({
   // 设置 valaxy-addon-waline 配置项
   addons: [
     addonWaline({
-      serverURL: "https://waline.yunyoujun.cn",
+      serverURL: "https://waline-pi-red.vercel.app/",
     }),
   ],
 

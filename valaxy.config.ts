@@ -1,5 +1,6 @@
 import type { UserThemeConfig } from "valaxy-theme-yun";
 import { defineValaxyConfig } from "valaxy";
+import { addonWaline } from "valaxy-addon-waline";
 
 // add icons what you will need
 const safelist = ["i-ri-home-line"];
@@ -62,6 +63,18 @@ export default defineValaxyConfig<UserThemeConfig>({
       },
     },
   },
+  siteConfig: {
+    // 启用评论
+    comment: {
+      enable: true,
+    },
+  },
+  // 设置 valaxy-addon-waline 配置项
+  addons: [
+    addonWaline({
+      serverURL: "https://waline.yunyoujun.cn",
+    }),
+  ],
 
   unocss: { safelist },
 });

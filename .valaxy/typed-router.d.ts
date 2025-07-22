@@ -29,6 +29,7 @@ declare module 'vue-router/auto-routes' {
     '/page/[page]': RouteRecordInfo<'/page/[page]', '/page/:page', { page: ParamValue<true> }, { page: ParamValue<false> }>,
     '/posts/': RouteRecordInfo<'/posts/', '/posts', Record<never, never>, Record<never, never>>,
     '/posts/docker-s': RouteRecordInfo<'/posts/docker-s', '/posts/docker-s', Record<never, never>, Record<never, never>>,
+    '/posts/efficiency-dev': RouteRecordInfo<'/posts/efficiency-dev', '/posts/efficiency-dev', Record<never, never>, Record<never, never>>,
     '/posts/elastic-search': RouteRecordInfo<'/posts/elastic-search', '/posts/elastic-search', Record<never, never>, Record<never, never>>,
     '/posts/fragment-a': RouteRecordInfo<'/posts/fragment-a', '/posts/fragment-a', Record<never, never>, Record<never, never>>,
     '/posts/java-threadPool': RouteRecordInfo<'/posts/java-threadPool', '/posts/java-threadPool', Record<never, never>, Record<never, never>>,

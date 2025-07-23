@@ -16,7 +16,7 @@ export default defineSiteConfig({
   favicon: "https://zzyang.top/logo.png",
   description: "知识管理与技术分享",
   timezone: "Asia/Shanghai",
-  codeHeightLimit: 500,
+  codeHeightLimit: 400,
   mediumZoom: { enable: true },
   vanillaLazyload: {
     // 默认不开启

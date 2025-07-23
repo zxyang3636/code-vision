@@ -18,6 +18,12 @@ export default defineValaxyConfig<UserThemeConfig>({
       enable: true,
       title: "张小阳的小站",
     },
+        //背景图,这里为我自己添加的字段
+    // bg_image: {
+    //   enable: true,  //这里是背景图的设置，你可以设置白日模式和夜间模式的背景图，如果你不需要背景图，可以将上面的enable改为false即可
+    //   url: "https://images.pexels.com/photos/1673973/pexels-photo-1673973.jpeg",	// 白日模式背景
+    //   dark: "",	// 夜间模式背景
+    // },
 
     pages: [
       {

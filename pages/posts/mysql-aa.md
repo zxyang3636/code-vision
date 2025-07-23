@@ -1703,3 +1703,5 @@ CALL insert_course(100);
 ```sql
 CALL insert_stu(1000000);
 ```
+
+#### 适合创建索引的11中情况

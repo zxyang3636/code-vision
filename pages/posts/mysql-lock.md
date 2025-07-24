@@ -136,7 +136,7 @@ tags:
 |           S锁|    不兼容   |     **兼容**  |
 
 
-**1. 锁定读**
+#### **1. 锁定读**
 
 在采用 `加锁` 方式解决 `脏读` 、 `不可重复读` 、 `幻读` 这些问题时，读取一条记录时需要获取该记录的 `S锁` ，其实是不严谨的，有时候需要在读取记录时就获取记录的 `X锁` ，来禁止别的事务读写该记录，为此MySQL提出了两种比较特殊的 `SELECT` 语句格式：
 - 对读取的记录加 `S锁`：
@@ -183,7 +183,7 @@ Empty set (0.00 sec)
 ```
 
 
-**2. 写操作**
+#### **2. 写操作**
 
 平常所用到的`写操作`无非是 `DELETE`、`UPDATE`、`INSERT` 这三种:
 - `DELETE`:
@@ -203,17 +203,426 @@ Empty set (0.00 sec)
 
 
 
+### 从数据操作的粒度划分：表级锁、页级锁、行锁
+
+为了尽可能提高数据库的并发度，每次锁定的数据范围越小越好，理论上每次只锁定当前操作的数据的方案会得到最大的并发度，但是管理锁是很`耗资源`的事情（涉及获取、检查、释放锁等动作）。因此数据库系统需要在`高并发响应`和`系统性能`两方面进行平衡，这样就产生了“`锁粒度（Lock granularity）`”的概念。
+
+对一条记录加锁影响的也只是这条记录而已，我们就说这个锁的粒度比较细；其实一个事务也可以在表级别进行加锁，自然就被称之为`表级锁`或者`表锁`，对一个表加锁影响整个表中的记录，我们就说这个锁的粒度比较粗。锁的粒度主要分为`表级锁`、`页级锁`和`行锁`。
+
+
+#### 1. 表锁（Table Lock）
+该锁会锁定整张表，它是 MySQL 中最基本的锁策略，并**不依赖于存储引擎**（不管你是 MySQL 的什么存储引擎，对于表锁的策略都是一样的），并且表锁是**开销最小**的策略（因为粒度比较大）。由于表级锁一次会将整个表锁定，所以可以很好的**避免死锁**问题。当然，锁的粒度大所带来最大的负面影响就是出现锁资源争用的概率也会最高，导致**并发率大打折扣**。
+
+读锁两个事务可读，不可写
+
+写锁只有一个事务可读可写，其他不行
+
+##### 2. 表级别的S锁、X锁
+
+在对某个表执行SELECT、INSERT、DELETE、UPDATE语句时，InnoDB存储引擎是不会为这个表添加表级别的 `S锁` 或者 `X锁` 的。在对某个表执行一些诸如 `ALTER TABLE` 、 `DROP TABLE` 这类的 `DDL` 语句时，其他事务对这个表并发执行诸如SELECT、INSERT、DELETE、UPDATE的语句会发生阻塞。同理，某个事务中对某个表执行SELECT、INSERT、DELETE、UPDATE语句时，在其他会话中对这个表执行 `DDL` 语句也会发生阻塞。这个过程其实是通过在 server层使用一种称之为 `元数据锁` （英文名： `Metadata Locks` ， 简称 MDL ）结构来实现的。
+
+一般情况下，不会使用InnoDB存储引擎提供的表级别的 `S锁` 和 `X锁` 。只会在一些特殊情况下，比方说 `崩溃恢复` 过程中用到。比如，在系统变量 `autocommit=0`，`innodb_table_locks = 1` 时， 手动 获取 InnoDB存储引擎提供的表t 的 `S锁` 或者 `X锁` 可以这么写：
+- `LOCK TABLES t READ` ：InnoDB存储引擎会对`表 t` 加表级别的 `S锁` 。
+- `LOCK TABLES t WRITE` ：InnoDB存储引擎会对`表 t` 加表级别的 `X锁` 。
+
+>`autocommit = 0`(autocommit=1 是默认值)，设置当前会话的自动提交行为为 关闭。
+>
+>`innodb_table_locks = 1`(默认值是：1)，允许 InnoDB 对表执行 表级锁（table-level locks）。InnoDB 在执行 LOCK TABLES 时会配合加上 InnoDB 的内部表锁（也称意向锁）。
 
 
 
 
 
 
+不过尽量避免在使用InnoDB存储引擎的表上使用 `LOCK TABLES` 这样的手动锁表语句，它们并不会提供 什么额外的保护，只是会降低并发能力而已。InnoDB的厉害之处还是实现了更细粒度的 `行锁` ，关于 InnoDB表级别的 `S锁` 和 `X锁` 大家了解一下就可以了。
+
+**举例：** 下面我们讲解MyISAM引擎下的表锁。
+
+步骤1：创建表并添加数据
+```sql
+CREATE TABLE mylock(
+id INT NOT NULL PRIMARY KEY auto_increment,
+NAME VARCHAR(20)
+)ENGINE myisam;
+
+# 插入一条数据
+INSERT INTO mylock(NAME) VALUES('a');
+
+# 查询表中所有数据
+SELECT * FROM mylock;
++----+------+
+| id | Name |
++----+------+
+| 1  | a    |
++----+------+
+```
+
+步骤二：查看表上加过的锁
+```sql
+SHOW OPEN TABLES; # 主要关注In_use字段的值
+或者
+SHOW OPEN TABLES where In_use > 0;
+```
+```sql
+mysql> show open tables;
++----------+-----------------------------------+---------+-----------+
+| Database | Table                             | In_use  | Name_locked |
++----------+-----------------------------------+---------+-----------+
+| atguigudb3 | mylock                            |       0 |         0 |
+| sys      | x$waits_by_user_by_latency        |       0 |         0 |
+| sys      | x$user_summary_by_stages          |       0 |         0 |
+| sys      | x$statements_with_sorting         |       0 |         0 |
+| sys      | x$statements_with_runtimes_in_95th_percentile |       0 |         0 |
+| sys      | x$statements_with_full_table_scans|       0 |         0 |
+| sys      | x$session                         |       0 |         0 |
+| sys      | x$schema_table_statistics_with_buffer |       0 |         0 |
+| sys      | x$schema_table_lock_waits         |       0 |         0 |
+| sys      | x$schema_index_statistics         |       0 |         0 |
+| sys      | x$processlist                     |       0 |         0 |
+| sys      | x$memory_global_total             |       0 |         0 |
+| sys      | x$io_global_by_wait_by_bytes      |       0 |         0 |
+| sys      | x$io_by_thread_by_latency         |       0 |         0 |
+| sys      | x$statement_analysis              |       0 |         0 |
+| sys      | x$host_summary_by_stages          |       0 |         0 |
+| sys      | x$host_summary_by_file_io_type    |       0 |         0 |
+| sys      | x$host_summary                    |       0 |         0 |
+| sys      | waits_by_host_by_latency          |       0 |         0 |
++----------+-----------------------------------+---------+-----------+
+```
+上面的结果表明，当前数据库中没有被锁定的表
+
+步骤3：手动增加表锁命令
+```sql
+LOCK TABLES t READ; # 存储引擎会对表t加表级别的共享锁。共享锁也叫读锁或S锁（Share的缩写）
+LOCK TABLES t WRITE; # 存储引擎会对表t加表级别的排他锁。排他锁也叫独占锁、写锁或X锁（exclusive的缩写）
+```
+比如：
+```sql
+mysql> lock tables mylock read;
+Query OK, 0 rows affected (0.00 sec)
+
+mysql> show open tables where in_use > 0;
++----------+--------+--------+-------------+
+| Database | Table  | In_use | Name_locked |
++----------+--------+--------+-------------+
+| atguigudb3 | mylock |      1 |           0 |
++----------+--------+--------+-------------+
+1 row in set (0.00 sec)
+```
+
+步骤4：释放表锁
+```sql
+UNLOCK TABLES; # 使用此命令解锁当前加锁的表
+```
+比如：
+```sql
+mysql> unlock tables;
+Query OK, 0 rows affected (0.00 sec)
+
+mysql> show open tables where in_use > 0;
+Empty set (0.00 sec)
+```
+步骤5：加读锁
+
+我们为mylock表加read锁（读阻塞写），观察阻塞的情况，流程如下：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-24_22-22-39.png)
+
+
+步骤6：加写锁
+
+为mylock表加write锁，观察阻塞的情况，流程如下：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-24_22-25-02.png)
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-24_22-25-28.png)
+
+**总结：**
+
+MyISAM在执行查询语句（SELECT）前，会给涉及的所有表加`读锁`，在执行增删改操作前，会给涉及的表加`写锁`。InnoDB存储引擎是不会为这个表添加表级别的`读锁`和写`锁的`。
+
+MySQL的表级锁有两种模式：（以MyISAM表进行操作的演示）
+
+- 表共享读锁（Table Read Lock）
+- 表独占写锁（Table Write Lock）
+
+
+|锁类型|自己可读|自己可写|自己可操作其他表|他人可读|他人可写|
+|----|----|----|----|----|----|
+|读锁|是|否|否|是|否，等|
+|写锁|是|是|否|否，等|否，等|
+
+
+
+##### 3. 意向锁（intention lock）
+`InnoDB` 支持 `多粒度锁（multiple granularity locking）` ，它允许 `行级锁` 与 `表级锁` 共存，而`意向锁`就是其中的一种 `表锁` 。
+
+1. `意向锁`的存在是为了协调`行锁`和`表锁`的关系，支持多粒度（表锁和行锁）的锁并存。
+2. `意向锁`是一种`不与行级锁冲突的表级锁`，这一点非常重要。
+3. 表明“某个事务正在某些行持有了锁或该事务准备去持有锁”
+
+意向锁分为两种：
+- **意向共享锁（intention shared lock, IS）**：事务有意向对表中的某些行加共享锁（S锁）
+```sql
+  -- 事务要获取某些行的 S 锁，必须先获得表的 IS 锁。
+  SELECT column FROM table ... LOCK IN SHARE MODE;
+  ```
+- **意向排他锁（intention exclusive lock, IX）**：事务有意向对表中的某些行加排他锁（X锁）
+```sql
+  -- 事务要获取某些行的 X 锁，必须先获得表的 IX 锁。
+  SELECT column FROM table ... FOR UPDATE;
+  ```
+
+即：意向锁是由存储引擎 `自己维护的` ，用户无法手动操作意向锁，在为数据行加共享 / 排他锁之前， `InooDB` 会先获取该数据行 `所在数据表的对应意向锁` 。
+
+---
+
+**意向锁要解决的问题**
+
+现在有两个事务，分别是T1和T2，其中T2试图在该表级别上应用共享或排它锁，如果没有意向锁存在，那么T2就需要去检查各个页或行是否存在锁；如果存在意向锁，那么此时就会受到由T1控制的`表级别意向锁的阻塞`。T2在锁定该表前不必检查各个页或行锁，而只需检查表上的意向锁。简单来说就是给更大一级别的空间示意里面是否已经上过锁。
+
+在数据表的场景中，**如果我们给某一行数据加上了排它锁，数据库会自动给更大一级的空间，比如数据页或数据表加上意向锁，告诉其他人这个数据页或数据表已经有人上过排它锁了**，这样当其他人想要获取数据表排它锁的时候，只需要了解是否有人已经获取了这个数据表的意向排他锁即可。
+- 如果事务想要获得数据表中某些记录的共享锁，就需要在数据表上添加意向共享锁。
+- 如果事务想要获得数据表中某些记录的排他锁，就需要在数据表上添加意向排他锁。
+
+**举例：** 创建表teacher,插入6条数据，事务的隔离级别默认为`Repeatable-Read`，如下所示。
+```sql
+CREATE TABLE `teacher` (
+	`id` int NOT NULL,
+    `name` varchar(255) NOT NULL,
+    PRIMARY KEY (`id`)
+)ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT INTO `teacher` VALUES
+('1', 'zhangsan'),
+('2', 'lisi'),
+('3', 'wangwu'),
+('4', 'zhaoliu'),
+('5', 'songhongkang'),
+('6', 'leifengyang');
+```
+```sql
+mysql> SELECT @@transaction_isolation;
++-------------------------+
+| @@transaction_isolation |
++-------------------------+
+| REPEATABLE-READ         |
++-------------------------+
+```
+假设事务A获取了某一行的排他锁，并未提交，语句如下所示:
+```sql
+BEGIN;
+
+SELECT * FROM teacher WHERE id = 6 FOR UPDATE;
+```
+事务B想要获取teacher表的表读锁，语句如下：
+```sql
+BEGIN;
+
+LOCK TABLES teacher READ;
+```
+因为共享锁与排他锁互斥，所以事务 B 在试图对 teacher 表加共享锁的时候，必须保证两个条件。
+
+（1）当前没有其他事务持有 teacher 表的排他锁  
+（2）当前没有其他事务持有 teacher 表中任意一行的排他锁。
+
+为了检测是否满足第二个条件，事务 B 必须在确保 teacher 表不存在任何排他锁的前提下，去检测表中的每一行是否存在排他锁。很明显这是一个效率很差的做法，但是有了意向锁之后，情况就不一样了。
+
+意向锁是怎么解决这个问题的呢？首先，我们需要知道意向锁之间的兼容互斥性，如下所示。
+
+|  | 意向共享锁（IS） | 意向排他锁（IX） |
+| --- | --- | --- |
+| 意向共享锁（IS） | 兼容 | 兼容 |
+| 意向排他锁（IX） | 兼容 | 兼容 |
+
+即意向锁之间是互相兼容的，虽然意向锁和自家兄弟互相兼容，但是它会与普通的排他/共享锁互斥。
+
+|  | 意向共享锁（IS） | 意向排他锁（IX） |
+| --- | --- | --- |
+| 共享锁（S） | **兼容** | 互斥 |
+| 排他锁（X） | 互斥 | 互斥 |
+
+注意这里的排他/共享锁指的都是表锁，意向锁不会与行级的共享/排他锁互斥。回到刚才 teacher 表的例子。
+
+事务 A 获取了某一行的排他锁，并未提交：
+```sql
+BEGIN;
+
+SELECT * FROM teacher WHERE id = 6 FOR UPDATE;
+```
+此时teacher表存在两把锁：teacher表上的意向排他锁 与 id为6的数据行上的排他锁。事务B想要获取teacher表的共享锁。
+```sql
+BEGIN;
+
+LOCK TABLES teacher READ;
+```
+此时事务B检测事务A持有teacher表的意向排他锁，就可以得知事务A必须持有该表中某些数据行的排他锁，那么事务B对teacher表的加锁请求就会被排斥（阻塞），而无需去检测表中的每一行数据是否存在排他锁。
+
+---
+
+**意向锁的并发性**
+
+意向锁不会与行级的共享 / 排他锁互斥！正因为如此，意向锁并不会影响到多个事务对不同数据行加排他锁时的并发性。（不然我们直接用普通的表锁就行了）
+
+我们扩展一下上面 teacher表的例子来概括一下意向锁的作用（一条数据从被锁定到被释放的过程中，可能存在多种不同锁，但是这里我们只着重表现意向锁）。
+
+事务A先获得了某一行的排他锁，并未提交：
+```sql
+BEGIN;
+
+SELECT * FROM teacher WHERE id = 6 FOR UPDATE;
+```
+事务A获取了teacher表上的意向排他锁。事务A获取了id为6的数据行上的排他锁。
+
+之后事务B想要获取teacher表上的共享锁。
+```sql
+BEGIN;
+
+LOCK TABLES teacher READ;
+```
+
+事务B检测到事务A持有teacher表的意向排他锁。事务B对teacher表的加锁请求被阻塞（排斥）。
+
+最后事务C也想获取teacher表中某一行的排他锁。
+```sql
+BEGIN;
+
+SELECT * FROM teacher WHERE id = 5 FOR UPDATE;
+```
+事务C申请teacher表的意向排他锁。事务C检测到事务A持有teacher表的意向排他锁。因为意向锁之间并不互斥，所以事务C获取到了teacher表的意向排他锁。因为id为5的数据行上不存在任何排他锁，最终事务C成功获取到了该数据行上的排他锁。
+
+**从上面的案例可以得到如下结论：**
+
+1. InnoDB 支持 `多粒度锁` ，特定场景下，行级锁可以与表级锁共存。
+2. 意向锁之间互不排斥，但除了 IS 与 S 兼容外， 意向锁会与(表级) 共享锁 / 排他锁 互斥。
+3. IX，IS是表级锁，不会和行级的X，S锁发生冲突。只会和表级的X，S发生冲突。
+4. 意向锁在保证并发性的前提下，实现了 `行锁和表锁共存` 且 `满足事务隔离性` 的要求。
 
 
 
 
+##### 4. 自增锁（AUTO-INC锁）
+在使用MySQL过程中，我们可以为表的某个列添加 `AUTO_INCREMENT` 属性。举例：
+```sql
+CREATE TABLE `teacher` (
+`id` int NOT NULL AUTO_INCREMENT,
+`name` varchar(255) NOT NULL,
+PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+```
+由于这个表的id字段声明了AUTO_INCREMENT，意味着在书写插入语句时不需要为其赋值，SQL语句修改 如下所示。
+```sql
+INSERT INTO `teacher` (name) VALUES ('zhangsan'), ('lisi');
+```
+
+上边的插入语句并没有为id列显式赋值，所以系统会自动为它赋上递增的值，结果如下所示。
+```sql
+mysql> select * from teacher;
++----+----------+
+| id | name     |
++----+----------+
+| 1  | zhangsan |
+| 2  | lisi     |
++----+----------+
+2 rows in set (0.00 sec)
+```
+现在我们看到的上面插入数据只是一种简单的插入模式，所有插入数据的方式总共分为三类，分别是 “ `Simple inserts` ”，“ `Bulk inserts` ”和“ `Mixed-mode inserts` ”。
+
+1. `“Simple inserts”` （简单插入）
+
+可以 `预先确定要插入的行数` （当语句被初始处理时）的语句。包括没有嵌套子查询的单行和多行`INSERT...VALUES()`和 `REPLACE` 语句。比如我们上面举的例子就属于该类插入，已经确定要插入的行数。
+
+2. `“Bulk inserts”` （批量插入）
+
+`事先不知道要插入的行数` （和所需自动递增值的数量）的语句。比如 `INSERT ... SELECT` ， `REPLACE ... SELECT` 和 `LOAD DATA` 语句，但不包括纯INSERT。 InnoDB在每处理一行，为`AUTO_INCREMENT`列
+
+3. `“Mixed-mode inserts”` （混合模式插入）
+
+这些是“Simple inserts”语句但是指定部分新行的自动递增值。例如 `INSERT INTO teacher (id,name) VALUES (1,'a'), (NULL,'b'), (5,'c'), (NULL,'d');` 只是指定了部分`id`的值。另一种类型的“混合模式插入”是` INSERT ... ON DUPLICATE KEY UPDATE` 。
 
 
+对于上面数据插入的案例，MySQL中采用了`自增锁`的方式来实现，**AUTO-INC锁是 当向使用含有AUTO_INCREMENT列的表中插入数据时需要获取的一种特殊的表级锁**，在执行插入语句时就在表级别加一个AUTO-INC锁，然后为每条待插入记录的AUTO_INCREMENT修饰的列分配递增的值，在该语句执行结束后，再把AUTO-INC锁释放掉。**一个事务在持有AUTO-INC锁的过程中，其他事务的插入语句都要被阻塞**，可以保证一个语句中分配的递增值是连续的。也正因为此，其并发性显然并不高，**当我们向一个有AUTO_INCREMENT关键字的主键插入值的时候，每条语句都要对这个表锁进行竞争**，这样的并发潜力其实是很低下的，所以innodb通过`innodb_autoinc_lock_mode`的不同取值来提供不同的锁定机制，来显著提高SQL语句的可伸缩性和性能。
+
+`innodb_autoinc_lock_mode`有三种取值，分别对应与不同锁定模式：
+
+（1）`innodb_autoinc_lock_mode = 0`(“传统”锁定模式 )
+
+在此锁定模式下，所有类型的insert语句都会获得一个特殊的表级AUTO-INC锁，用于插入具有 AUTO_INCREMENT列的表。这种模式其实就如我们上面的例子，即每当执行insert的时候，都会得到一个 表级锁(AUTO-INC锁)，使得语句中生成的auto_increment为顺序，且在binlog中重放的时候，可以保证 master与slave中数据的auto_increment是相同的。因为是表级锁，当在同一时间多个事务中执行insert的 时候，对于AUTO-INC锁的争夺会 `限制并发` 能力。
+
+（2）`innodb_autoinc_lock_mode = 1`(“连续”锁定模式 )
+
+在 MySQL 8.0 之前，连续锁定模式是 `默认` 的。
+
+在这个模式下，“bulk inserts”仍然使用AUTO-INC表级锁，并保持到语句结束。这适用于所有INSERT ... SELECT，REPLACE ... SELECT和LOAD DATA语句。同一时刻只有一个语句可以持有AUTO-INC锁。
+
+对于“Simple inserts”（要插入的行数事先已知），则通过在 `mutex（轻量锁）` 的控制下获得所需数量的自动递增值来避免表级AUTO-INC锁， 它只在分配过程的持续时间内保持，而不是直到语句完成。不使用表级AUTO-INC锁，除非AUTO-INC锁由另一个事务保持。如果另一个事务保持AUTO-INC锁，则“Simple inserts”等待AUTO-INC锁，如同它是一个“bulk inserts”。
+
+（3）`innodb_autoinc_lock_mode = 2`(“交错”锁定模式 )
+
+从 MySQL 8.0 开始，交错锁模式是 `默认` 设置。
+
+在此锁定模式下，自动递增值 `保证` 在所有并发执行的所有类型的insert语句中是 `唯一` 且 `单调递增` 的。但是，由于多个语句可以同时生成数字（即，跨语句交叉编号），**为任何给定语句插入的行生成的值可能不是连续的**。
+
+如果执行的语句是“simple inserts"，其中要插入的行数已提前知道，除了"Mixed-mode inserts"之外，为单个语句生成的数字不会有间隙。然后，当执行"bulk inserts"时，在由任何给定语句分配的自动递增值中可能存在间隙。
+
+
+
+
+##### 5. 元数据锁（MDL锁）
+
+`MySQL5.5`引入了`meta data lock`，简称MDL锁，属于表锁范畴。MDL 的作用是，保证读写的正确性。比如，如果一个查询正在遍历一个表中的数据，而执行期间另一个线程对这个`表结构做变更` ，增加了一 列，那么查询线程拿到的结果跟表结构对不上，肯定是不行的。
+
+因此，**当对一个表做增删改查操作的时候，加 MDL读锁；当要对表做结构变更操作的时候，加 MDL 写锁**。
+
+读锁之间不互斥，因此你可以有多个线程同时对一张表增删查改。读写锁之间、写锁之间都是互斥的，用来保证变更表结构操作的安全性，解决了DML和DDL操作之间的一致性问题。`不需要显式使用`，在访问一个表的时候会被自动加上。
+
+**举例：元数据锁的使用场景模拟**
+
+**会话A：** 从表中查询数据
+```sql
+mysql> BEGIN;
+Query OK, 0 rows affected (0.00 sec)
+mysql> SELECT COUNT(1) FROM teacher;
++----------+
+| COUNT(1) |
++----------+
+| 2        |
++----------+
+1 row int set (7.46 sec)
+```
+
+**会话B：** 修改表结构，增加新列
+```sql
+mysql> BEGIN;
+Query OK, 0 rows affected (0.00 sec)
+mysql> alter table teacher add age int not null;
+```
+
+**会话C：** 查看当前MySQL的进程
+```sql
+mysql> show processlist;
+```
+```sql
+mysql> show processlist;
++----+------------------+-----------+---------+---------+------+-----------------------------+------------------------------+
+| Id | User             | Host      | db      | Command | Time | State                       | Info                         |
++----+------------------+-----------+---------+---------+------+-----------------------------+------------------------------+
+| 5  | event_scheduler  | localhost | NULL    | Daemon  | 8205 | Waiting on empty queue      | NULL                         |
+| 8  | root             | localhost | atguigudb1 | Sleep   | 46   |                             | NULL                         |
+| 9  | root             | localhost | atguigudb1 | Query   | 24   | Waiting for table metadata lock | alter table teacher add age int |
+| 13 | root             | localhost | NULL    | Query   | 0    | init                        | show processlist             |
++----+------------------+-----------+---------+---------+------+-----------------------------+------------------------------+
+4 rows in set (0.00 sec)
+```
+通过会话C可以看出会话B被阻塞，这是由于会话A拿到了teacher表的`元数据读锁`，会话B想申请teacher表的`元数据写锁`，由于读写锁互斥，会话B需要等待会话A释放元数据锁才能执行。
+
+
+**元数据锁可能带来的问题**
+
+| Session A | Session B | Session C |
+| --- | --- | --- |
+| begin;select * from teacher; |  |  |
+|  | alter table teacher add age int; |  |
+|  |  | select * from teacher; |
+
+我们可以看到 session A 会对表 teacher 加一个 MDL 读锁，之后 session B 要加 MDL 写锁会被 blocked，因为 session A 的 MDL 读锁还没有释放，而 session C 要在表 teacher 上新申请 MDL 读锁的请求也会被 session B 阻塞。前面我们说了，所有对表的增删改查操作都需要先申请 MDL 读锁，就都被阻塞，等于这个表现在完全不可读写了。
 
 

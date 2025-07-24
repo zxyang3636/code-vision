@@ -58,6 +58,7 @@ top: 1
   | **PDF24 Tools** | 免费且易于使用的在线PDF工具 | [🔗 官网](https://tools.pdf24.org/zh/) |
   | **CloudConvert** | 在线文件转换器 | [🔗 官网](https://cloudconvert.com/) |
   | **imgdiet** | 在线图片处理工具 | [🔗 官网](https://www.imgdiet.com/zh-CN) |
+  | **图片压缩** | 谷歌图片压缩 | [🔗 官网](https://squoosh.app/) |
 
 
 **其他**
@@ -79,7 +80,6 @@ top: 1
 
   | 工具名称 | 核心功能 | 访问/下载 |
   | :--- | :--- | :--- |
-  | **Windows软件下载** | Windows软件下载合集 | [🔗 官网](https://www.aode8.com/) |
   | **夸父资源社** | 优质夸克网盘资源分享社区 | [🔗 官网](https://www.kuafuzys.com/) |
   | **柳橙昔网址导航** | 实用的导航站 | [🔗 官网](https://nav.yiov.top/) |
   | **阿虚同学的储物间** | 一个储物间 | [🔗 官网](https://axutongxue.com/) |

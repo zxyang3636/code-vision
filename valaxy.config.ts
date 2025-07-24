@@ -14,15 +14,16 @@ export default defineValaxyConfig<UserThemeConfig>({
   theme: "yun",
 
   themeConfig: {
+    outline: [1, 6],  // 'deep' 即可在目录显示二级标题到六级标题
     banner: {
       enable: true,
       title: "张小阳的小站",
     },
-        //背景图,这里为我自己添加的字段
+    //背景图,这里为我自己添加的字段
     // bg_image: {
     //   enable: true,  //这里是背景图的设置，你可以设置白日模式和夜间模式的背景图，如果你不需要背景图，可以将上面的enable改为false即可
-    //   url: "https://images.pexels.com/photos/1673973/pexels-photo-1673973.jpeg",	// 白日模式背景
-    //   dark: "",	// 夜间模式背景
+    //   url: "https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E3%80%90%E5%93%B2%E9%A3%8E%E5%A3%81%E7%BA%B8%E3%80%91%E6%B5%B7%E8%BE%B9-%E8%87%AA%E7%84%B6-%E9%A3%8E%E6%99%AF.png",	// 白日模式背景
+    //   dark: "https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E3%80%90%E5%93%B2%E9%A3%8E%E5%A3%81%E7%BA%B8%E3%80%91%E5%82%8D%E6%99%9A%E5%A4%95%E9%98%B3-%E5%9F%8E%E5%B8%82%E5%A4%9C%E6%99%AF.png",	// 夜间模式背景
     // },
 
     pages: [
@@ -39,10 +40,10 @@ export default defineValaxyConfig<UserThemeConfig>({
         color: "dodgerblue",
       },
       {
-        name: '我的小伙伴们',
-        url: '/links/',
-        icon: 'i-ri-group-fill',
-        color: 'dodgerblue',
+        name: "我的小伙伴们",
+        url: "/links/",
+        icon: "i-ri-group-fill",
+        color: "dodgerblue",
       },
       // {
       //   name: '喜欢的女孩子',

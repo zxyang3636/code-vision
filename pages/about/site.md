@@ -13,16 +13,8 @@ title: 关于站点
 
 主题采用简洁、优雅的设计风格，适合专注写作与内容展示。
 
-## 🛠 技术栈
 
-- [Valaxy](https://github.com/YunYouJun/valaxy )：基于 Vue 3 + Vite 的静态站点生成器
-- [valaxy-theme-yun](https://github.com/YunYouJun/valaxy/blob/main/packages/valaxy-theme-yun/ )：云之彼端风格的主题，支持评论、统计、暗黑模式等特性
-- Markdown 编写 + Git 管理内容
-- 可部署于 Vercel / Netlify / GitHub Pages 等平台
 
-## 📦 源码地址
-
-- 🌐 项目地址：[https://github.com/YunYouJun/valaxy ](https://github.com/YunYouJun/valaxy )
 
 
 欢迎 Star、Fork、提交 Issue 或 PR，一起共建美好博客生态 🌟

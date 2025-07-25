@@ -13,17 +13,15 @@ title: 关于我
 ### 后端开发
 - **Java** - 主要开发语言，具备扎实的Java基础和丰富的项目经验
 - **Spring 全家桶** - Spring Framework、Spring Boot、Spring MVC、Spring Cloud
-- **数据库** - MySQL 设计与优化，熟悉索引优化和查询调优
-- **缓存** - Redis 缓存架构设计，分布式缓存应用
+- **数据库** - MySQL、Redis 设计与优化，熟悉索引优化和查询调优
+- **中间件** - Elasticsearch、RabbitMQ 缓存架构设计，分布式缓存应用
+- **微服务** - Spring Cloud Alibaba、Nacos、Sentinel、Seata
+- **运维与部署** - Docker
 
 ### 前端开发
 - **Vue 3** - 现代化前端框架，组合式API和响应式开发
 - **TypeScript** - 类型安全的JavaScript，提升代码质量
 - **JavaScript** - ES6+现代JavaScript特性
-
-### 微服务架构
-- **Spring Cloud** - 微服务生态，服务治理和分布式系统设计
-- **分布式技术** - 熟悉微服务架构模式和最佳实践
 
 ---
 
@@ -54,8 +52,8 @@ title: 关于我
 
 如果你对我的技术分享感兴趣，或者想要交流技术问题，欢迎通过以下方式联系我：
 
-- **GitHub**: [Your GitHub Profile]
-- **Email**: [your.email@example.com]
+- **GitHub**: [GitHub](https://github.com/zxyang3636)
+- **Email**: [zxyang3636@163.com](mailto:zxyang3636@163.com)
 - **技术交流**: 欢迎在博客文章下留言讨论
 
 ---
@@ -64,10 +62,8 @@ title: 关于我
 
 目前我正在深入研究：
 
-- **Spring Boot 3.x** - 新特性探索和性能优化
-- **MySQL 8.0** - 新功能应用和查询优化
-- **Vue 3 生态** - 组合式API深度应用
-- **微服务架构** - 云原生应用设计模式
+- **云原生技术** - Kubernetes、Service Mesh、云原生架构设计
+- **AI 应用开发** - 大模型集成、AI 辅助开发工具
 
 ---
 

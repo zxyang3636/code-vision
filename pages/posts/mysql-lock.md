@@ -217,7 +217,7 @@ Empty set (0.00 sec)
 
 写锁只有一个事务可读可写，其他不行
 
-##### 2. 表级别的S锁、X锁
+##### 1. 表级别的S锁、X锁
 
 在对某个表执行SELECT、INSERT、DELETE、UPDATE语句时，InnoDB存储引擎是不会为这个表添加表级别的 `S锁` 或者 `X锁` 的。在对某个表执行一些诸如 `ALTER TABLE` 、 `DROP TABLE` 这类的 `DDL` 语句时，其他事务对这个表并发执行诸如SELECT、INSERT、DELETE、UPDATE的语句会发生阻塞。同理，某个事务中对某个表执行SELECT、INSERT、DELETE、UPDATE语句时，在其他会话中对这个表执行 `DDL` 语句也会发生阻塞。这个过程其实是通过在 server层使用一种称之为 `元数据锁` （英文名： `Metadata Locks` ， 简称 MDL ）结构来实现的。
 
@@ -352,7 +352,7 @@ MySQL的表级锁有两种模式：（以MyISAM表进行操作的演示）
 
 
 
-##### 3. 意向锁（intention lock）
+##### 2. 意向锁（intention lock）
 `InnoDB` 支持 `多粒度锁（multiple granularity locking）` ，它允许 `行级锁` 与 `表级锁` 共存，而`意向锁`就是其中的一种 `表锁` 。
 
 1. `意向锁`的存在是为了协调`行锁`和`表锁`的关系，支持多粒度（表锁和行锁）的锁并存。
@@ -421,7 +421,7 @@ LOCK TABLES teacher READ;
 ```
 因为共享锁与排他锁互斥，所以事务 B 在试图对 teacher 表加共享锁的时候，必须保证两个条件。
 
-（1）当前没有其他事务持有 teacher 表的排他锁  
+（1）当前没有其他事务持有 teacher 表的排他锁
 （2）当前没有其他事务持有 teacher 表中任意一行的排他锁。
 
 为了检测是否满足第二个条件，事务 B 必须在确保 teacher 表不存在任何排他锁的前提下，去检测表中的每一行是否存在排他锁。很明显这是一个效率很差的做法，但是有了意向锁之后，情况就不一样了。
@@ -499,7 +499,7 @@ SELECT * FROM teacher WHERE id = 5 FOR UPDATE;
 
 
 
-##### 4. 自增锁（AUTO-INC锁）
+##### 3. 自增锁（AUTO-INC锁）
 在使用MySQL过程中，我们可以为表的某个列添加 `AUTO_INCREMENT` 属性。举例：
 ```sql
 CREATE TABLE `teacher` (
@@ -563,10 +563,41 @@ mysql> select * from teacher;
 
 如果执行的语句是“simple inserts"，其中要插入的行数已提前知道，除了"Mixed-mode inserts"之外，为单个语句生成的数字不会有间隙。然后，当执行"bulk inserts"时，在由任何给定语句分配的自动递增值中可能存在间隙。
 
+:::tip
+`INSERT INTO teacher (name) SELECT ...`：把查询出来的数据批量插入到另一张表
+
+`INSERT ... ON DUPLICATE KEY UPDATE`：如果已存在就更新，否则就插入，避免主键冲突
+
+`REPLACE ... SELECT`: 从一张表中查询数据,并将其插入到目标表中;如果主键或唯一键冲突，先删除冲突行，再插入新行
+
+`LOAD DATA`： 用于高效地将文本文件（通常是 CSV/TSV、制表符分隔文件等）导入到表中。
+```sql
+LOAD DATA [LOCAL] INFILE 'file_path'
+INTO TABLE 目标表
+[CHARACTER SET 文件字符集]
+FIELDS TERMINATED BY '分隔符'
+[OPTIONALLY] ENCLOSED BY '引用符'
+LINES TERMINATED BY '行结束符'
+IGNORE n LINES
+(col1, col2, ..., colN)
+SET colX = expr, …;
+
+ -- LOCAL：若文件在客户端机器上，需加 LOCAL；否则省略表示服务器端文件。
+ -- FIELDS TERMINATED BY：字段之间的分隔符，默认为制表符 \t。
+ -- ENCLOSED BY：字段两侧包裹字符，比如 CSV 常用双引号 "。
+ -- LINES TERMINATED BY：行结束符，Unix 下一般 \n。
+ -- IGNORE n LINES：忽略前几行（比如跳过表头）。
+```
+
+| 对比项  | REPLACE ... SELECT | INSERT ... ON DUPLICATE KEY UPDATE|
+|--------|---------------------|--------------------|
+|冲突时行为 |删除 + 插入 |更新指定字段|
+|是否保留原记录其他字段 |❌ 否（会被清空） |✅ 是|
+
+:::
 
 
-
-##### 5. 元数据锁（MDL锁）
+##### 4. 元数据锁（MDL锁）
 
 `MySQL5.5`引入了`meta data lock`，简称MDL锁，属于表锁范畴。MDL 的作用是，保证读写的正确性。比如，如果一个查询正在遍历一个表中的数据，而执行期间另一个线程对这个`表结构做变更` ，增加了一 列，那么查询线程拿到的结果跟表结构对不上，肯定是不行的。
 

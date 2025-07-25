@@ -657,3 +657,372 @@ mysql> show processlist;
 我们可以看到 session A 会对表 teacher 加一个 MDL 读锁，之后 session B 要加 MDL 写锁会被 blocked，因为 session A 的 MDL 读锁还没有释放，而 session C 要在表 teacher 上新申请 MDL 读锁的请求也会被 session B 阻塞。前面我们说了，所有对表的增删改查操作都需要先申请 MDL 读锁，就都被阻塞，等于这个表现在完全不可读写了。
 
 
+#### 2. InnoDB中的行锁
+
+行锁（Row Lock）也称为记录锁，顾名思义，就是锁住某一行（某条记录 row）。需要注意的是，MySQL服务器层并没有实现行锁机制，**行级锁只在存储引擎层实现**。
+
+**优点：** 锁定力度小，发生`锁冲突概率低`，可以实现的`并发度高`。
+
+**缺点：** 对于`锁的开销比较大`，加锁会比较慢，容易出现`死锁`情况。
+
+InnoDB与MyISAM的最大不同有两点：一是支持事务（TRANSACTION）；二是采用了行级锁。
+
+首先我们创建表如下：
+
+```sql
+CREATE TABLE student (
+	id INT,
+    name VARCHAR(20),
+    class VARCHAR(10),
+    PRIMARY KEY (id)
+) Engine=InnoDB CHARSET=utf8;
+```
+向这个表里插入几条记录：
+```sql
+INSERT INTO student VALUES
+(1, '张三', '一班'),
+(3, '李四', '一班'),
+(8, '王五', '二班'),
+(15, '赵六', '二班'),
+(20, '钱七', '三班');
+
+mysql> SELECT * FROM student;
+```
+
+```sql
+mysql> select * from student;
++----+--------+-------+
+| id | name   | class |
++----+--------+-------+
+| 1  | 张三   | 一班  |
+| 3  | 李四   | 一班  |
+| 8  | 王五   | 二班  |
+| 15 | 赵六   | 二班  |
+| 20 | 钱七   | 三班  |
++----+--------+-------+
+5 rows in set (0.00 sec)
+```
+student表中的聚簇索引的简图如下所示。
+
+聚簇索引示意图
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_20-46-49.png)
+
+这里把B+树的索引结构做了超级简化，只把索引中的记录给拿了出来，下面看看都有哪些常用的行锁类型。
+
+##### 记录锁（Record Locks）
+记录锁也就是仅仅把一条记录锁，官方的类型名称为：`LOCK_REC_NOT_GAP`。比如我们把id值为8的那条记录加一个记录锁的示意图如果所示。仅仅是锁住了id值为8的记录，对周围的数据没有影响。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_20-49-08.png)
+
+举例如下：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_20-49-49.png)
+
+记录锁是有S锁和X锁之分的，称之为 `S型记录锁` 和 `X型记录锁` 。
+
+- 当一个事务获取了一条记录的S型记录锁后，其他事务也可以继续获取该记录的S型记录锁，但不可以继续获取X型记录锁；
+- 当一个事务获取了一条记录的X型记录锁后，其他事务既不可以继续获取该记录的S型记录锁，也不可以继续获取X型记录锁。
+
+
+
+##### 间隙锁（Gap Locks）
+
+`MySQL` 在 `REPEATABLE READ` 隔离级别下是可以解决幻读问题的，解决方案有两种，可以使用 `MVCC` 方案解决，也可以采用 `加锁` 方案解决。但是在使用加锁方案解决时有个大问题，就是事务在第一次执行读取操作时，那些幻影记录尚不存在，我们无法给这些 `幻影记录` 加上 `记录锁` 。InnoDB提出了一种称之为 `Gap Locks` 的锁，官方的类型名称为： `LOCK_GAP` ，我们可以简称为 `gap锁` 。比如，把id值为8的那条 记录加一个gap锁的示意图如下。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_20-54-21.png)
+
+
+图中id值为8的记录加了gap锁，意味着 `不允许别的事务在id值为8的记录前边的间隙插入新记录` ，其实就是 id列的值(3, 8)这个区间的新记录是不允许立即插入的。比如，有另外一个事务再想插入一条id值为4的新 记录，它定位到该条新记录的下一条记录的id值为8，而这条记录上又有一个gap锁，所以就会阻塞插入 操作，直到拥有这个gap锁的事务提交了之后，id列的值在区间(3, 8)中的新记录才可以被插入。
+
+**gap锁的提出仅仅是为了防止插入幻影记录而提出的。** 虽然有`共享gap锁`和`独占gap锁`这样的说法，但是它们起到的作用是相同的。而且如果对一条记录加了gap锁（不论是共享gap锁还是独占gap锁），并不会限制其他事务对这条记录加记录锁或者继续加gap锁（间隙锁与其他间隙锁是兼容的，不会互相阻塞。多个事务可以在同一个间隙上加“间隙锁”，它们之间是兼容的）。
+
+
+**举例：**
+|  Session1   | Session2  |
+| --- | --- |
+|    select * from student where id=5 lock in share mode;      |        |
+|               |         select * from student where id=5 for update;           |
+
+
+这里session2并不会被堵住。因为表里并没有id=5这条记录，因此session1嘉的是间隙锁(3,8)。而session2也是在这个间隙加的间隙锁。它们有共同的目标，即：保护这个间隙锁，不允许插入值。但，它们之间是不冲突的。
+
+注意，给一条记录加了 `gap锁` 只是 `不允许` 其他事务往这条记录前边的间隙 `插入新记录` ，那对于最后一条记录之后的间隙，也就是student表中id值为`20`的记录之后的间隙该咋办呢？也就是说给哪条记录加`gap锁` 才能阻止其他事务插入`id`值在`(20，+∞)`这个区间的新记录呢？这时候我们在讲数据页时介绍的两条伪记录派上用场了：
+
+- `Infimum`记录，表示该页面中最小的记录。
+- `Supremun`记录，表示该页面中最大的记录。
+
+
+为了实现阻止其他事务插入id值再`(20,正无穷)`这个区间的新纪录，我们可以给索引中的最后一条记录，也就是id值为20的那条记录所在页面的`Supremun记录`加上一个`gap锁`，如图所示。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/restore_07e7c628731c488aaebe30881e08d74d_1753448365%20%281%29.jpg)
+
+
+```sql
+mysql> select * from student where id > 20 lock in share mode;
+Empty set (0.01 sec)
+```
+
+检测：
+
+```sql
+mysql> SELECT * FROM performance_schema.data_locks\G
+*************************** 1. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 140176306603936:1182:140176189910224
+ENGINE_TRANSACTION_ID: 110977
+THREAD_ID: 54
+EVENT_ID: 45
+OBJECT_SCHEMA: atguigudb3
+OBJECT_NAME: student
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: NULL
+OBJECT_INSTANCE_BEGIN: 140176189910224
+LOCK_TYPE: TABLE
+LOCK_MODE: IX
+LOCK_STATUS: GRANTED
+LOCK_DATA: NULL
+```
+
+```sql
+*************************** 2. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 140176306602224:1182:140176189898032
+ENGINE_TRANSACTION_ID: 421651283312880
+THREAD_ID: 51
+EVENT_ID: 109
+OBJECT_SCHEMA: atguigudb3
+OBJECT_NAME: student
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: NULL
+OBJECT_INSTANCE_BEGIN: 140176189898032
+LOCK_TYPE: TABLE
+LOCK_MODE: IS
+LOCK_STATUS: GRANTED
+LOCK_DATA: NULL
+*************************** 3. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 140176306602224:121:4:1:140176189894928
+ENGINE_TRANSACTION_ID: 421651283312880
+THREAD_ID: 51
+EVENT_ID: 109
+OBJECT_SCHEMA: atguigudb3
+OBJECT_NAME: student
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: PRIMARY
+OBJECT_INSTANCE_BEGIN: 140176189894928
+LOCK_TYPE: RECORD
+LOCK_MODE: S
+LOCK_STATUS: GRANTED
+LOCK_DATA: supremum pseudo-record
+3 rows in set (0.00 sec)
+
+```
+我们可以看到 `supremum pseudo-record`字样
+这样就可以阻止其他事务插入id值在`(20,+∞)`这个区间的新记录。
+
+间隙锁的引入，可能会导致同样的语句锁住更大的范围，这其实是影响了并发度的。下面的例子会产生`死锁`
+
+|  Session1   | Session2  |
+| --- | --- |
+|    begin; <br/> select * from student where id=5 lock in share mode;      |   begin; <br/> select * from student where id=5 for update;           |
+|                                       |       INTER INTO student VALUES (5,'小明','二班');  阻塞                          |
+|      INTER INTO student VALUES (5,'小明','二班');   <br/>    (ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction)                            |        | 
+
+（1）session 1 执行 select … for update 语句，由于 id = 5 这一行并不存在，因此会加上间隙锁（3，8）；  
+（2）session 2 执行 select … for update 语句，同样会加上间隙锁（3，8），间隙锁之间不会冲突，因此这个语句可以执行成功；  
+（3）session 2 试图插入一行(5, '小明', '二班')，被 session 1 的间隙锁挡住了，只好进入等待；  
+（4）session 1 试图插入一行(5, '小明', '二班')，被 session 2 的间隙锁挡住了。至此，两个 session 进入互相等待状态，形成*死锁*。当然，InnoDB 的死锁检测马上就发现了这对死锁关系，让 session 1 的 insert 语句报错返回。
+
+
+:::tip
+`Infimum`(in fai men) 和 `Supremum`(se pu rui men) 是两个虚拟记录（伪记录），它们并不是你自己插入的数据，而是 每个 InnoDB 数据页（Data Page）中自动存在的特殊记录，用于维持页内记录的有序性。
+
+`Infimum` 表示页中最小的值，`Supremum` 表示页中最大的值，用来做页内记录排序的边界哨兵。
+
+`InnoDB` 把表数据按 `B+ 树` 组织，底层是按页（Page）存储的, 每个数据页中，记录按主键顺序排列。
+
+而为了高效地比较和插入记录的位置，InnoDB 每个数据页会默认包含两个特殊记录：
+| 伪记录        | 含义  | 作用          |
+| ---------- | --- | ----------- |
+| `Infimum`  | 极小值 | 小于该页中所有数据记录 |
+| `Supremum` | 极大值 | 大于该页中所有数据记录 |
+
+:::
+
+- 什么时候会加间隙锁？
+
+>只在 REPEATABLE READ（可重复读）隔离级别下自动加间隙锁
+>
+>SQL 语句必须涉及 索引 （尤其是范围查询）
+>
+>使用 `SELECT ... FOR UPDATE` 或 `SELECT ... LOCK IN SHARE MODE`
+>
+>`UPDATE` 或 `DELETE` 语句
+
+
+
+##### 临键锁（Next—Key Locks）
+
+有时候我们既想 `锁住某条记录` ，又想 `阻止` 其他事务在该记录前边的 `间隙插入新记录` ，所以InnoDB就提 出了一种称之为 `Next-Key Locks` 的锁，官方的类型名称为： `LOCK_ORDINARY` ，我们也可以简称为 n`ext-key锁` 。Next-Key Locks是在存储引擎 `innodb` 、事务级别在 `可重复读` 的情况下使用的数据库锁， **innodb默认的锁就是Next-Key locks**。比如，我们把id值为8的那条记录加一个next-key锁的示意图如下：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_22-40-14.png)
+`next-key锁`的本质就是一个`记录锁`和一个`gap锁`的合体，它既能保护该条记录，又能阻止别的事务将新记录插入被保护记录前边的`间隙`。
+```sql
+begin;
+select * from student where id <=8 and id > 3 for update;
+```
+
+
+
+##### 插入意向锁（Insert Intention Locks）
+我们说一个事务在`插入`一条记录时需要判断一下插入位置是不是被别的事务加了 `gap 锁`（`next-key 锁`也包含 `gap 锁`），如果有的话，插入操作需要等待，直到拥有 `gap 锁`的那个事务提交。但是 **InnoDB 规定事务在等待的时候也需要在内存中生成一个锁结构**，表明有事务想在某个`间隙`中`插入`新记录，但是现在在等待。InnoDB 就把这种类型的锁命名为 `Insert Intention Locks`，官方的类型名称为：`LOCK_INSERT_INTENTION`，我们称为`插入意向锁`。插入意向锁是一种 `Gap 锁`，不是意向锁，在 insert 操作时产生。
+
+插入意向锁是在插入一条记录行前，由 `INSERT 操作产生的一种间隙锁`。该锁用以表示插入意向，当多个事务在同一区间（gap）插入位置不同的多条数据时，事务之间不需要互相等待。假设存在两条值分别为 4 和 7 的记录，两个不同的事务分别试图插入值为 5 和 6 的两条记录，每个事务在获取插入行上独占的（排他）锁前，都会获取（4，7）之间的间隙锁，但是因为数据行之间并`不冲突`，所以两个事务之间并不会产生冲突（阻塞等待）。总结来说，插入意向锁的特性可以分成两部分：
+
+（1）插入意向锁是一种`特殊的间隙锁` —— 间隙锁可以锁定开区间内的部分记录。
+
+（2）插入意向锁之间`互不排斥`，所以即使多个事务在同一区间插入多条记录，只要记录本身（主键、唯一索引）不冲突，那么事务之间就不会出现冲突等待。
+
+注意，虽然插入意向锁中含有意向锁三个字，但是它并不属于意向锁而属于间隙锁，因为意向锁是表锁 而插入意向锁是`行锁`。
+
+比如，把 id 值为 8 的那条记录加一个插入意向锁的示意图如下：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_22-44-50.png)
+
+比如，现在 T1 为 id 值为 8 的记录加了一个 gap 锁，然后 T2 和 T3 分别想向 student 表中插入 id 值分别为 4、5 的两条记录，所以现在为 id 值为 8 的记录加的锁的示意图就如下所示：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/restore_be604441cd554588b6eab11f7af712ed_1753454787.jpg)
+从图中可以看到，由于T1持有gap锁，所以T2和T3需要生成一个插入意向锁的锁结构并且处于等待状态。当T1提交后会把它获取到的锁都释放掉，这样T2和T3就能获取到对应的插入意向锁了（本质上就是把插入意向锁对应锁结构的is_waiting属性改为false），T2和T3之间也并不会相互阻塞，它们可以同时获取到id值为8的插入意向锁，然后执行插入操作。事实上**插入意向锁并不会阻止别的事务继续获取该记录上任何类型的锁**。
+
+
+#### 3. 页锁
+页锁就是在 `页的粒度` 上进行锁定，锁定的数据资源比行锁要多，因为一个页中可以有多个行记录。当我们使用页锁的时候，会出现数据浪费的现象，但这样的浪费最多也就是一个页上的数据行。**页锁的开销介于表锁和行锁之间，会出现死锁。锁定粒度介于表锁和行锁之间，并发度一般**。
+
+每个层级的锁数量是有限制的，因为锁会占用内存空间， `锁空间的大小是有限的` 。当某个层级的锁数量 超过了这个层级的阈值时，就会进行 `锁升级` 。锁升级就是用更大粒度的锁替代多个更小粒度的锁，比如 InnoDB 中行锁升级为表锁，这样做的好处是占用的锁空间降低了，但同时数据的并发度也下降了。
+
+
+### 从对待锁的态度划分:乐观锁、悲观锁
+
+#### 悲观锁
+从对待锁的态度来看锁的话，可以将锁分成乐观锁和悲观锁，从名字中也可以看出这两种锁是两种看待 `数据并发的思维方式` 。需要注意的是，乐观锁和悲观锁并不是锁，而是锁的 `设计思想` 。
+
+1. 悲观锁（Pessimistic Locking）
+
+悲观锁是一种思想，顾名思义，就是很悲观，对数据被其他事务的修改持保守态度，会通过数据库自身的锁机制来实现，从而保证数据操作的排它性。
+
+悲观锁总是假设最坏的情况，每次去拿数据的时候都认为别人会修改，所以每次在拿数据的时候都会上锁，这样别人想拿这个数据就会 阻塞 直到它拿到锁（**共享资源每次只给一个线程使用，其它线程阻塞， 用完后再把资源转让给其它线程**）。比如行锁，表锁等，读锁，写锁等，都是在做操作之前先上锁，当其他线程想要访问数据时，都需要阻塞挂起。Java中 `synchronized` 和 `ReentrantLock` 等独占锁就是悲观锁思想的实现。
+
+**秒杀案例1：**
+
+商品秒杀过程中，库存数量的减少，避免出现超卖的情况。比如，商品表中有一个字段为 quantity 表示当前该商品的库存量。假设商品为华为 mate40，id 为 1001，quantity = 100 个。如果不使用锁的情况下，操作方法如下所示
+```sql
+#第1步：查出商品库存
+select quantity from items where id = 1001;
+#第2步：如果库存大于0，则根据商品信息生产订单
+insert into orders (item_id) values(1001);
+#第3步：修改商品的库存，num表示购买数量
+update items set quantity = quantity - num where id = 1001;
+```
+这样写的话，在并发量小的公司没有大的问题，但是如果在`高并发环境`下可能出现以下问题
+|    | 线程A               | 线程B               |
+|----|---------------------|---------------------|
+| 1  | step1（查询还有100部手机） | step1（查询还有100部手机） |
+| 2  |                     | step2（生成订单）     |
+| 3  | step2（生成订单）     |                     |
+| 4  |                     | step3（减库存1）     |
+| 5  | step3（减库存2）     |                     |
+
+其中线程B此时已经下单并且减完库存，这个时候线程A依然去执行step3，就造成了超卖。
+
+我们使用悲观锁可以解决这个问题，商品信息从查询出来到修改，中间有一个生成订单的过程，使用悲观锁的原理就是，当我们在查询items信息后就把当前的数据锁定，直到我们修改完毕后再解锁。那么整个过程中，因为数据被锁定了，就不会出现有第三者来对其进行修改了。而这样做的前提是<font style="color:red">需要将要执行的SQL语句放在同一个事务中，否则达不到锁定数据行的目的</font>。
+
+修改如下：
+```sql
+#第1步：查出商品库存
+select quantity from items where id = 1001 for update;
+#第2步：如果库存大于0，则根据商品信息生产订单
+insert into orders (item_id) values(1001);
+#第3步：修改商品的库存，num表示购买数量
+update items set quantity = quantity-num where id = 1001;
+```
+`select .... for update` 是MySQL中悲观锁。此时在items表中，id为1001的那条数据就被我们锁定了，其他的要执行select quantity from items where id = 1001 for update;语句的事务必须等本次事务提交之后才能执行。这样我们可以保证当前的数据不会被其它事务修改。
+
+注意，当执行select quantity from items where id = 1001 for update;语句之后，如果在其他事务中执行select quantity from items where id = 1001; 语句，并不会受第一个事务的影响，仍然可以正常查询出数据。
+
+注意：<font style="color:red">select ... for update语句执行过程中所有扫描的行都会被锁上，因此在MySQL中用悲观锁必须确定使用了索引，而不是全表扫描，否则将会把整个表锁住</font>。
+
+悲观锁不适用的场景较多，它存在一些不足，因为悲观锁大多数情况下依靠数据库的锁机制来实现，以保证程序的并发访问性，同时这样对数据库性能开销影响也很大，特别是`长事务`而言，这样的`开销往往无法承受`，这时就需要乐观锁。
+
+
+:::tip
+- 在使用悲观锁（如 `SELECT ... FOR UPDATE`）时，必须确保查询是基于索引的，这样可以避免全表扫描和性能问题。有索引的话，只会锁住扫描到的符合条件的行。
+- 如果没有索引，查询会进行全表扫描并锁住所有相关行，这样可能导致锁表，并影响系统的并发性能。
+
+如果没有索引，表锁会加在整个表上，可能导致不必要的性能损耗。
+
+>Select是否加锁
+- 在 REPEATABLE READ 或 SERIALIZABLE 隔离级别下，MySQL 会为读取的行加 共享锁，确保在同一事务内读取的数据不会发生变化（避免幻读）。但是，这只是为了保证数据一致性，不会阻止其他事务的读取，只会阻止写入。
+
+- 在 READ COMMITTED 隔离级别下，不会加任何锁，可能会导致 脏读（读取到其他事务未提交的数据）。
+:::
+
+#### 乐观锁
+
+乐观锁认为对同一数据的并发操作不会总发生，属于小概率事件，不用每次都对数据上锁，但是在更新的时候会判断一下在此期间别人有没有去更新这个数据，也就是不采用数据库自身的锁机制，而是通过程序来实现。在程序上，我们可以采用 `版本号机制` 或者 `CAS机制` 实现。乐观锁适用于多读的应用类型， 这样可以提高吞吐量。在Java中 `java.util.concurrent.atomic` 包下的原子变量类就是使用了乐观锁的一种实现方式：CAS实现的。
+
+1. 乐观锁的版本号机制
+
+在表中设计一个 `版本字段 version` ，第一次读的时候，会获取 `version` 字段的取值。然后对数据进行更新或删除操作时，会执行 `UPDATE ... SET version=version+1 WHERE version=version` 。此时 如果已经有事务对这条数据进行了更改，修改就不会成功。
+
+这种方式类似我们熟悉的SVN、CVS版本管理系统，当我们修改了代码进行提交时，首先会检查当前版本号与服务器上的版本号是否一致，如果一致就可以直接提交，如果不一致就需要更新服务器上的最新代码，然后再进行提交。
+
+2. 乐观锁的时间戳机制
+
+时间戳和版本号机制一样，也是在更新提交的时候，将当前数据的时间戳和更新之前取得的时间戳进行 比较，如果两者一致则更新成功，否则就是版本冲突。
+
+你能看到乐观锁就是程序员自己控制数据并发操作的权限，基本是通过给数据行增加一个戳（版本号或 者时间戳），从而证明当前拿到的数据是否最新。
+
+>时间戳机制
+```sql
+SELECT id, status, timestamp FROM orders WHERE id = 1;
+
+UPDATE orders SET status = 'completed', timestamp = NOW() WHERE id = 1 AND timestamp = #{timestamp};
+```
+
+**秒杀案例2**
+
+依然使用上面秒杀的案例，执行流程如下
+```sql
+#第1步：查出商品库存
+select quantity from items where id = 1001;
+#第2步：如果库存大于0，则根据商品信息生产订单
+insert into orders (item_id) values(1001);
+#第3步：修改商品的库存，num表示购买数量
+update items set quantity = quantity - num, version = version + 1 where id = 1001 and version = #{version};
+```
+
+注意，如果数据表是读写分离的表，当matser表中写入的数据没有及时同步到slave表中时，会造成更新一直失败的问题。此时需要强制读取master表中的数据（即将select语句放到事务中即可，这时候查询的就是master主库了。）
+
+如果我们对同一条数据进行频繁的修改的话，那么就会出现这么一种场景，每次修改都只有一个事务能更新成功，在业务感知上面就有大量的失败操作。我们把代码修改如下：
+
+```sql
+#第1步：查出商品库存
+select quantity from items where id = 1001;
+#第2步：如果库存大于0，则根据商品信息生产订单
+insert into orders (item_id) values(1001);
+#第3步：修改商品的库存，num表示购买数量
+update items set quantity = quantity - num where id = 1001 and quantity - num > 0;
+```
+这样就会使每次修改都能成功，而且不会出现超卖的现象。
+
+#### 两种锁的适用场景
+
+从这两种锁的设计思想中，我们总结一下乐观锁和悲观锁的适用场景：
+
+1. 乐观锁 适合 `读操作多` 的场景，相对来说写的操作比较少。它的优点在于 `程序实现` ， `不存在死锁` 问题，不过适用场景也会相对乐观，因为它阻止不了除了程序以外的数据库操作。
+2. 悲观锁 适合 `写操作多` 的场景，因为写的操作具有 `排它性` 。采用悲观锁的方式，可以在数据库层 面阻止其他事务对该数据的操作权限，防止 `读 - 写` 和 `写 - 写` 的冲突。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-26_00-17-09.png)
+
+
+
+### 按加锁的方式划分：显式锁、隐式锁

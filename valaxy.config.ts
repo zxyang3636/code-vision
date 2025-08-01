@@ -22,8 +22,8 @@ export default defineValaxyConfig<UserThemeConfig>({
     //背景图,这里为我自己添加的字段
     // bg_image: {
     //   enable: true,  //这里是背景图的设置，你可以设置白日模式和夜间模式的背景图，如果你不需要背景图，可以将上面的enable改为false即可
-    //   url: "https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E3%80%90%E5%93%B2%E9%A3%8E%E5%A3%81%E7%BA%B8%E3%80%91%E6%B5%B7%E8%BE%B9-%E8%87%AA%E7%84%B6-%E9%A3%8E%E6%99%AF.png",	// 白日模式背景
-    //   dark: "https://img.meituan.net/csc/45a2f30d42e53ee8598b7eb0c7fb221a3830511.jpg",	// 夜间模式背景
+    //   url: "https://img.116119.xyz/img/2025/07/26/3fce32544d96f5e16beb87856e87f6be.jpg",	// 白日模式背景
+    //   dark: "https://img.116119.xyz/img/2025/07/26/d368fa2016450edba53b1c1d196a9072.jpg",	// 夜间模式背景
     // },
 
     pages: [

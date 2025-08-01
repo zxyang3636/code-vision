@@ -6,6 +6,8 @@ title: 关于我
 
 我是一名热爱技术的全栈开发工程师，专注于Java后端开发和现代前端技术。热衷于探索新技术，分享开发经验，并通过代码创造价值。
 
+<img src="https://ghchart.rshah.org/zxyang3636" alt="zxyang3636's Github chart" />
+
 ---
 
 ## 🛠️ 技术栈

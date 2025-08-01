@@ -827,11 +827,14 @@ LOCK_DATA: supremum pseudo-record
 | --- | --- |
 |    begin; <br/> select * from student where id=5 lock in share mode;      |   begin; <br/> select * from student where id=5 for update;           |
 |                                       |       INTER INTO student VALUES (5,'小明','二班');  阻塞                          |
-|      INTER INTO student VALUES (5,'小明','二班');   <br/>    (ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction)                            |        | 
+|      INTER INTO student VALUES (5,'小明','二班');   <br/>    (ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction)                            |        |
 
-（1）session 1 执行 select … for update 语句，由于 id = 5 这一行并不存在，因此会加上间隙锁（3，8）；  
-（2）session 2 执行 select … for update 语句，同样会加上间隙锁（3，8），间隙锁之间不会冲突，因此这个语句可以执行成功；  
-（3）session 2 试图插入一行(5, '小明', '二班')，被 session 1 的间隙锁挡住了，只好进入等待；  
+（1）session 1 执行 select … for update 语句，由于 id = 5 这一行并不存在，因此会加上间隙锁（3，8）;
+
+（2）session 2 执行 select … for update 语句，同样会加上间隙锁（3，8），间隙锁之间不会冲突，因此这个语句可以执行成功；
+
+（3）session 2 试图插入一行(5, '小明', '二班')，被 session 1 的间隙锁挡住了，只好进入等待；
+
 （4）session 1 试图插入一行(5, '小明', '二班')，被 session 2 的间隙锁挡住了。至此，两个 session 进入互相等待状态，形成*死锁*。当然，InnoDB 的死锁检测马上就发现了这对死锁关系，让 session 1 的 insert 语句报错返回。
 
 
@@ -864,7 +867,7 @@ LOCK_DATA: supremum pseudo-record
 
 ##### 临键锁（Next—Key Locks）
 
-有时候我们既想 `锁住某条记录` ，又想 `阻止` 其他事务在该记录前边的 `间隙插入新记录` ，所以InnoDB就提 出了一种称之为 `Next-Key Locks` 的锁，官方的类型名称为： `LOCK_ORDINARY` ，我们也可以简称为 n`ext-key锁` 。Next-Key Locks是在存储引擎 `innodb` 、事务级别在 `可重复读` 的情况下使用的数据库锁， **innodb默认的锁就是Next-Key locks**。比如，我们把id值为8的那条记录加一个next-key锁的示意图如下：
+有时候我们既想 `锁住某条记录` ，又想 `阻止` 其他事务在该记录前边的 `间隙插入新记录` ，所以InnoDB就提 出了一种称之为 `Next-Key Locks` 的锁，官方的类型名称为： `LOCK_ORDINARY` ，我们也可以简称为 `next-key锁` 。Next-Key Locks是在存储引擎 `innodb` 、事务级别在 `可重复读` 的情况下使用的数据库锁， **innodb默认的锁就是Next-Key locks**。比如，我们把id值为8的那条记录加一个next-key锁的示意图如下：
 
 ![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-07-25_22-40-14.png)
 `next-key锁`的本质就是一个`记录锁`和一个`gap锁`的合体，它既能保护该条记录，又能阻止别的事务将新记录插入被保护记录前边的`间隙`。

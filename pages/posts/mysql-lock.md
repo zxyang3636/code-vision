@@ -742,7 +742,7 @@ student表中的聚簇索引的简图如下所示。
 |               |         select * from student where id=5 for update;           |
 
 
-这里session2并不会被堵住。因为表里并没有id=5这条记录，因此session1嘉的是间隙锁(3,8)。而session2也是在这个间隙加的间隙锁。它们有共同的目标，即：保护这个间隙锁，不允许插入值。但，它们之间是不冲突的。
+这里session2并不会被堵住。因为表里并没有id=5这条记录，因此session1加的是间隙锁(3,8)。而session2也是在这个间隙加的间隙锁。它们有共同的目标，即：保护这个间隙锁，不允许插入值。但，它们之间是不冲突的。
 
 注意，给一条记录加了 `gap锁` 只是 `不允许` 其他事务往这条记录前边的间隙 `插入新记录` ，那对于最后一条记录之后的间隙，也就是student表中id值为`20`的记录之后的间隙该咋办呢？也就是说给哪条记录加`gap锁` 才能阻止其他事务插入`id`值在`(20，+∞)`这个区间的新记录呢？这时候我们在讲数据页时介绍的两条伪记录派上用场了：
 
@@ -1029,3 +1029,406 @@ update items set quantity = quantity - num where id = 1001 and quantity - num > 
 
 
 ### 按加锁的方式划分：显式锁、隐式锁
+
+
+#### 隐式锁
+一个事务在执行 `INSERT` 操作时，如果即将插入的间隙已经被其他事务加了 `gap` 锁，那么本次 `INSERT` 操作会阻塞，并且当前事务会在该间隙上加一个`插入意向锁`，否则一般情况下 `INSERT` 操作是不加锁的。那如果一个事务首先插入了一条记录（此时并没有在内存生产与该记录关联的锁结构），然后另一个事务：
+
+- 立即使用 `SELECT... LOCK IN SHARE MODE` 语句读取这条记录，也就是要获取这条记录的 `S 锁`，或者使用 `SELECT... FOR UPDATE` 语句读取这条记录，也就是要获取这条记录的 `X 锁`，怎么办？
+如果允许这种情况的发生，那么可能产生`脏读`问题。
+- 立即修改这条记录，也就是要获取这条记录的 `X 锁`，怎么办？
+如果允许这种情况的发生，那么可能产生`脏写`问题。
+
+这时候我们前边提过的`事务 id` 又要起作用了。我们把聚簇索引和二级索引中的记录分开看一下：
+
+- 情景一：对于聚簇索引记录来说，有一个 `trx_id` 隐藏列，该隐藏列记录着最后改动该记录的 `事务 id` 。那么如果在当前事务中新插入一条聚簇索引记录后，该记录的 `trx_id` 隐藏列代表的的就是 当前事务的 `事务id` ，如果其他事务此时想对该记录添加 `S锁` 或者 `X锁` 时，首先会看一下该记录的 `trx_id` 隐藏列代表的事务是否是当前的活跃事务，如果是的话，那么就帮助当前事务创建一个 `X 锁` （也就是为当前事务创建一个锁结构， `is_waiting` 属性是 `false` ），然后自己进入等待状态 （也就是为自己也创建一个锁结构， `is_waiting` 属性是 `true` ）。
+- 情景二：对于二级索引记录来说，本身并没有 `trx_id` 隐藏列，但是在二级索引页面的 `Page Header` 部分有一个 `PAGE_MAX_TRX_ID` 属性，该属性代表对该页面做改动的最大的 `事务id` ，如果 `PAGE_MAX_TRX_ID` 属性值小于当前最小的活跃 `事务id` ，那么说明对该页面做修改的事务都已经提交了，否则就需要在页面中定位到对应的二级索引记录，然后回表找到它对应的聚簇索引记录，然后再重复 `情景一` 的做法。
+
+即：一个事务对新插入的记录可以不显式的加锁（生成一个锁结构），但是由于`事务id`的存在，相当于加了一个`隐式锁`。别的事务在对这条记录加`S锁`或者`X锁`时，由于`隐式锁`的存在，会先帮助当前事务生成一个锁结构，然后自己再生成一个锁结构后进入等待状态。隐式锁是一种`延迟加锁`的机制，从而来减少加锁的数量。
+
+隐式锁在实际内存对象中并不含有这个锁信息。只有当产生锁等待时，隐式锁转化为显式锁。
+
+InnoDB的insert操作，对插入的记录不加锁，但是此时如果另一个线程进行当前读，类似以下的用例，session 2会锁等待session 1，那么这是如何实现的呢?
+
+
+
+
+session 1:
+```sql
+mysql> begin;
+Query OK, 0 rows affected (0.00 sec)
+mysql> insert INTO student VALUES(34,"周八","二班");
+Query OK, 1 row affected (0.00 sec)
+```
+session 2:
+```sql
+mysql> begin;
+Query OK, 0 rows affected (0.00 sec)
+mysql> select * from student lock in share mode; #执行完，当前事务被阻塞
+```
+session 3: 
+
+执行下述语句，输出结果：
+```sql
+mysql> SELECT * FROM performance_schema.data_lock_waits\G;
+*************************** 1. row ***************************
+						ENGINE: INNODB
+		REQUESTING_ENGINE_LOCK_ID: 140562531358232:7:4:9:140562535668584
+REQUESTING_ENGINE_TRANSACTION_ID: 422037508068888
+			REQUESTING_THREAD_ID: 64
+			REQUESTING_EVENT_ID: 6
+REQUESTING_OBJECT_INSTANCE_BEGIN: 140562535668584
+		BLOCKING_ENGINE_LOCK_ID: 140562531351768:7:4:9:140562535619104
+BLOCKING_ENGINE_TRANSACTION_ID: 15902
+			BLOCKING_THREAD_ID: 64
+			BLOCKING_EVENT_ID: 6
+BLOCKING_OBJECT_INSTANCE_BEGIN: 140562535619104
+1 row in set (0.00 sec)
+```
+隐式锁的逻辑过程如下：
+
+A. InnoDB的每条记录中都一个隐含的trx_id字段，这个字段存在于聚簇索引的B+Tree中。
+
+B. 在操作一条记录前，首先根据记录中的trx_id检查该事务是否是活动的事务(未提交或回滚)。如果是活动的事务，首先将 隐式锁 转换为 显式锁 (就是为该事务添加一个锁)。
+
+C. 检查是否有锁冲突，如果有冲突，创建锁，并设置为waiting状态。如果没有冲突不加锁，跳到E。
+
+D. 等待加锁成功，被唤醒，或者超时。
+
+E. 写数据，并将自己的trx_id写入trx_id字段。
+
+
+
+
+#### 显式锁
+通过特定的语句进行加锁，我们一般称之为显示加锁，例如：
+
+显示加共享锁：
+```sql
+select .... lock in share mode
+```
+显示加排它锁：
+
+```sql
+select .... for update
+```
+
+
+
+### 其它锁之：全局锁
+
+
+
+
+### 其它锁之：死锁
+
+**概念**
+
+两个事务都持有对方需要的锁，并且在等待对方释放，并且双方都不会释放自己的锁。
+
+举例1：
+|    | 事务1                                  | 事务2                                  |
+|----|--------------------------------------|--------------------------------------|
+| 1  | start transaction;<br/>update account set money=100 where id=1; | start transaction;                  |
+| 2  |                                      | update account set money=100 where id=2; |
+| 3  | update account set money=200 where id=2; |                                      |
+| 4  |                                      | update account set money=200 where id=1; |
+
+
+举例2：
+
+用户A给用户B转账100，再次同时，用户B也给用户A转账100。这个过程，可能导致死锁。
+```sql
+#事务1
+update account set balance = balance - 100 where name = 'A';  #操作1
+update account set balance = balance + 100 where name = 'B';  #操作3
+#事务2
+update account set balance = balance - 100 where name = 'B';  #操作2
+update account set balance = balance + 100 where name = 'A';  #操作4
+```
+
+<img src="https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_21-41-51.png " 
+     style="width: 100%; max-width: 300px;" />
+
+**产生死锁的必要条件**
+1. 两个或者两个以上事务
+2. 每个事务都已经持有锁并且申请新的锁
+3. 锁资源同时只能被同一个事务持有或者不兼容
+4. 事务之间因为持有锁和申请锁导致彼此循环等待
+
+>死锁的关键在于：两个（或以上）的Session加锁的顺序不一致。
+
+
+**如何处理死锁**
+
+**方式1：** 等待，直到超时 (innodb_lock_wait_timeout=50s)
+即当两个事务互相等待时，当一个事务等待时间超过设置的阈值时，就将其回滚，另外事务继续进行。这种方法简单有效，在innodb中，参数`innodb_lock_wait_timeout`用来设置超时时间。
+
+缺点：对于在线服务来说，这个等待时间往往是无法接受的。
+
+那将此值修改短一些，比如1s，0.1s是否合适？不合适，容易误伤到普通的锁等待。
+
+**方式2：** 使用死锁检测处理死锁程序
+方式1检测死锁太过被动，innodb还提供了`wait-for graph`算法来主动进行死锁检测，每当加锁请求无法立即满足需要并进入等待时，`wait-for graph`算法都会被触发。
+
+这是一种较为`主动的死锁检测机制`，要求数据库保存`锁的信息链表`和`事务等待链表`两部分信息。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_21-52-13.png)
+
+基于这两个信息，可以绘制wait-for graph（等待图）
+
+<img src="https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_21-52-23.png" style="max-width:300px;"  />
+
+
+>死锁检测的原理是构建一个以事务为顶点，锁为边的有向图，判断有向图是否存在环，存在既有死锁。
+
+一旦检测到回路、有死锁，这时候InnoDB存储引擎会选择`回滚undo量最小的事务`，让其他事务继续执行（`innodb_deadlock_detect=on`表示开启这个逻辑）。
+
+缺点：每个新的被阻塞的线程，都要判断是不是由于自己的加入导致了死锁，这个操作时间复杂度是O(n)。如果100个并发线程同时更新同一行，意味着要检测100*100=1万次，1万个线程就会有1千万次检测。
+
+**如何解决？**
+
+方式1：关闭死锁检测，但意味着可能会出现大量的超时，会导致业务有损。  
+
+方式2：控制并发访问的数量。比如在中间件中实现对于相同行的更新，在进入引擎之前排队，这样在InnoDB内部就不会有大量的死锁检测工作。
+
+**进一步的思路：**
+
+可以考虑通过将一行改成逻辑上的多行来减少锁冲突。比如，连锁超市账户总额的记录，可以考虑放到多条记录上。账户总额等于这多个记录的值的总和。
+
+**如何避免死锁**
+
+- 合理设计索引，使业务 `SQL` 尽可能通过索引定位更少的行，减少锁竞争。
+- 调整业务逻辑 `SQL` 执行顺序，避免 `update/delete` 长时间持有锁的 `SQL` 在事务前面。
+- 避免大事务，尽量将大事务拆成多个小事务来处理，小事务缩短锁定资源的时间，发生锁冲突的几率也更小。
+- 在并发比较高的系统中，不要显式加锁，特别是在事务里显式加锁。如 `select … for update` 语句，如果是在事务里运行了 `start transaction` 或设置了 `autocommit 等于 0`，那么就会锁定所查找到的记录。
+- 降低隔离级别。如果业务允许，将隔离级别调低也是较好的选择，比如将隔离级别从 `RR` 调整为 `RC`，可以避免掉很多因为 `gap 锁`造成的死锁。
+
+
+### 锁的内部结构
+
+我们前边说对一条记录加锁的本质就是在内存中创建一个锁结构与之关联，那么是不是一个事务对多条记录加锁，就要创建多个锁结构呢？比如：
+```sql
+# 事务T1
+SELECT * FROM user LOCK IN SHARE MODE;
+```
+
+理论上创建多个`锁结构`没问题，但是如果一个事务要获取10000条记录的锁，生成10000个锁结构也太崩溃了！所以决定在对不同记录加锁时，如果符合下边这些条件的记录会放在一个`锁结构`中。
+
+- 在同一个事务中进行加锁操作
+- 被加锁的记录在同一个页面中
+- 加锁的类型是一样的
+- 等待状态是一样的
+`InnoDB` 存储引擎中的 `锁结构` 如下：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_22-51-24.png)
+结构解析：
+
+1. **锁所在的事务信息** ：
+
+不论是 `表锁` 还是 `行锁` ，都是在事务执行过程中生成的，哪个事务生成了这个锁结构 ，这里就记录这个 事务的信息。
+
+此 `锁所在的事务信息` 在内存结构中只是一个指针，通过指针可以找到内存中关于该事务的更多信息，比方说事务id等。
+
+2. **索引信息** ：
+
+对于 `行锁` 来说，需要记录一下加锁的记录是属于哪个索引的。这里也是一个指针。
+
+3. **表锁／行锁信息** ：
+
+`表锁结构` 和 `行锁结构` 在这个位置的内容是不同的：
+
+- 表锁：
+记载着是对哪个表加的锁，还有其他的一些信息。
+
+- 行锁：
+记载了三个重要的信息：
+
+  - `Space ID` ：记录所在表空间。
+  - `Page Number` ：记录所在页号。
+  - `n_bits` ：对于行锁来说，一条记录就对应着一个比特位，一个页面中包含很多记录，用不同 的比特位来区分到底是哪一条记录加了锁。为此在行锁结构的末尾放置了一堆比特位，这个`n_bis`属性代表使用了多少比特位。
+>`n_bits`的值一般都比页面中记录条数多一些。主要是为了之后在页面中插入了新记录后 也不至于重新分配锁结构
+
+4. **type_mode** ：
+
+这是一个32位的数，被分成了 `lock_mode` 、 `lock_type` 和 `rec_lock_type` 三个部分，如图所示：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_22-53-30.png)
+
+- 锁的模式（ lock_mode ），占用低4位，可选的值如下：
+  - `LOCK_IS` （十进制的 0 ）：表示共享意向锁，也就是 `IS锁` 。
+  - `LOCK_IX` （十进制的 1 ）：表示独占意向锁，也就是 `IX锁` 。
+  - `LOCK_S` （十进制的 2 ）：表示共享锁，也就是 `S锁` 。
+  - `LOCK_X` （十进制的 3 ）：表示独占锁，也就是 `X锁` 。
+  - `LOCK_AUTO_INC` （十进制的 4 ）：表示 `AUTO-INC锁` 。
+
+
+在InnoDB存储引擎中，`LOCK_IS`，`LOCK_IX`，`LOCK_AUTO_INC`都算是表级锁的模式，`LOCK_S`和 `LOCK_X`既可以算是表级锁的模式，也可以是行级锁的模式。
+
+- 锁的类型（ lock_type ），占用第5～8位，不过现阶段只有第5位和第6位被使用：
+  - `LOCK_TABLE` （十进制的 16 ），也就是当第5个比特位置为1时，表示表级锁。
+  - `LOCK_REC` （十进制的 32 ），也就是当第6个比特位置为1时，表示行级锁。
+
+- 行锁的具体类型（ rec_lock_type ），使用其余的位来表示。只有在 `lock_type` 的值为 `LOCK_REC` 时，也就是只有在该锁为行级锁时，才会被细分为更多的类型：
+  - `LOCK_ORDINARY` （十进制的 0 ）：表示 next-key锁 。
+  - `LOCK_GAP` （十进制的 512 ）：也就是当第10个比特位置为1时，表示 `gap锁` 。
+  - `LOCK_REC_NOT_GAP` （十进制的 1024 ）：也就是当第11个比特位置为1时，表示正经 `记录锁` 。
+  - `LOCK_INSERT_INTENTION` （十进制的 2048 ）：也就是当第12个比特位置为1时，表示插入意向锁。其他的类型：还有一些不常用的类型我们就不多说了。
+
+
+- `is_waiting` 属性呢？基于内存空间的节省，所以把 `is_waiting` 属性放到了 `type_mode` 这个32 位的数字中：
+  - `LOCK_WAIT` （十进制的 256 ） ：当第9个比特位置为 1 时，表示 `is_waiting` 为 `true` ，也 就是当前事务尚未获取到锁，处在等待状态；当这个比特位为 0 时，表示 `is_waiting` 为 `false` ，也就是当前事务获取锁成功。
+
+
+5. **其他信息** ：
+
+为了更好的管理系统运行过程中生成的各种锁结构而设计了各种哈希表和链表。
+
+
+6. **一堆比特位** ：
+
+如果是 `行锁结构` 的话，在该结构末尾还放置了一堆比特位，比特位的数量是由上边提到的 `n_bits` 属性 表示的。InnoDB数据页中的每条记录在 记录头信息 中都包含一个 `heap_no` 属性，伪记录 `Infimum` 的 `heap_no` 值为 0 ， `Supremum` 的 `heap_no` 值为 1 ，之后每插入一条记录， `heap_no` 值就增1。 锁结 构 最后的一堆比特位就对应着一个页面中的记录，一个比特位映射一个 `heap_no` ，即一个比特位映射 到页内的一条记录。
+
+
+### 锁监控
+
+关于MySQL锁的监控，我们一般可以通过检查 InnoDB_row_lock 等状态变量来分析系统上的行锁的争夺情况
+```sql
+mysql> show status like 'innodb_row_lock%';
++-------------------------------+-------+
+| Variable_name                 | Value |
++-------------------------------+-------+
+| Innodb_row_lock_current_waits | 0     |
+| Innodb_row_lock_time          | 0     |
+| Innodb_row_lock_time_avg      | 0     |
+| Innodb_row_lock_time_max      | 0     |
+| Innodb_row_lock_waits         | 0     |
++-------------------------------+-------+
+5 rows in set (0.01 sec)
+```
+
+对各个状态量的说明如下：
+
+- Innodb_row_lock_current_waits：当前正在等待锁定的数量；
+- `Innodb_row_lock_time` ：从系统启动到现在锁定总时间长度；（等待总时长）
+- `Innodb_row_lock_time_avg` ：每次等待所花平均时间；（等待平均时长）
+- Innodb_row_lock_time_max：从系统启动到现在等待最常的一次所花的时间；
+- `Innodb_row_lock_waits` ：系统启动后到现在总共等待的次数；（等待总次数）
+
+对于这5个状态变量，比较重要的3个见上面（灰色）。
+
+尤其是当等待次数很高，而且每次等待时长也不小的时候，我们就需要分析系统中为什么会有如此多的等待，然后根据分析结果着手指定优化计划。
+
+**其他监控方法：**
+
+MySQL把事务和锁的信息记录在了 `information_schema` 库中，涉及到的三张表分别是 `INNODB_TRX` 、 `INNODB_LOCKS` 和 `INNODB_LOCK_WAITS` 。
+
+MySQL5.7及之前 ，可以通过`information_schema.INNODB_LOCKS`查看事务的锁情况，但只能看到阻塞事务的锁；如果事务并未被阻塞，则在该表中看不到该事务的锁情况。
+
+MySQL8.0删除了`information_schema.INNODB_LOCKS`，添加了 `performance_schema.data_locks` ，可以通过`performance_schema.data_locks`查看事务的锁情况，和MySQL5.7及之前不同， `performance_schema.data_locks`不但可以看到阻塞该事务的锁，还可以看到该事务所持有的锁。
+
+同时，information_schema.INNODB_LOCK_WAITS也被 `performance_schema.data_lock_waits` 所代替。
+
+我们模拟一个锁等待的场景，以下是从这三张表收集的信息
+
+锁等待场景，我们依然使用记录锁中的案例，当事务2进行等待时，查询情况如下：
+
+（1）查询正在被锁阻塞的sql语句。
+
+```sql
+SELECT * FROM information_schema.INNODB_TRX\G;
+```
+重要属性代表含义已在上述中标注。
+
+（2）查询锁等待情况
+```sql
+SELECT * FROM data_lock_waits\G;
+*************************** 1. row ***************************
+							ENGINE: INNODB
+		REQUESTING_ENGINE_LOCK_ID: 139750145405624:7:4:7:139747028690608
+REQUESTING_ENGINE_TRANSACTION_ID: 13845 #被阻塞的事务ID
+			REQUESTING_THREAD_ID: 72
+			REQUESTING_EVENT_ID: 26
+REQUESTING_OBJECT_INSTANCE_BEGIN: 139747028690608
+		BLOCKING_ENGINE_LOCK_ID: 139750145406432:7:4:7:139747028813248
+BLOCKING_ENGINE_TRANSACTION_ID: 13844 #正在执行的事务ID，阻塞了13845
+			BLOCKING_THREAD_ID: 71
+			BLOCKING_EVENT_ID: 24
+BLOCKING_OBJECT_INSTANCE_BEGIN: 139747028813248
+1 row in set (0.00 sec)
+```
+
+（3）查询锁的情况
+```sql
+mysql > SELECT * from performance_schema.data_locks\G;
+*************************** 1. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 139750145405624:1068:139747028693520
+ENGINE_TRANSACTION_ID: 13847
+THREAD_ID: 72
+EVENT_ID: 31
+OBJECT_SCHEMA: atguigu
+OBJECT_NAME: user
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: NULL
+OBJECT_INSTANCE_BEGIN: 139747028693520
+LOCK_TYPE: TABLE
+LOCK_MODE: IX
+LOCK_STATUS: GRANTED
+LOCK_DATA: NULL
+*************************** 2. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 139750145405624:7:4:7:139747028690608
+ENGINE_TRANSACTION_ID: 13847
+THREAD_ID: 72
+EVENT_ID: 31
+OBJECT_SCHEMA: atguigu
+OBJECT_NAME: user
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: PRIMARY
+OBJECT_INSTANCE_BEGIN: 139747028690608
+LOCK_TYPE: RECORD
+LOCK_MODE: X,REC_NOT_GAP
+LOCK_STATUS: WAITING
+LOCK_DATA: 1
+*************************** 3. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 139750145406432:1068:139747028816304
+ENGINE_TRANSACTION_ID: 13846
+THREAD_ID: 71
+EVENT_ID: 28
+OBJECT_SCHEMA: atguigu
+OBJECT_NAME: user
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: NULL
+OBJECT_INSTANCE_BEGIN: 139747028816304
+LOCK_TYPE: TABLE
+LOCK_MODE: IX
+LOCK_STATUS: GRANTED
+LOCK_DATA: NULL
+*************************** 4. row ***************************
+ENGINE: INNODB
+ENGINE_LOCK_ID: 139750145406432:7:4:7:139747028813248
+ENGINE_TRANSACTION_ID: 13846
+THREAD_ID: 71
+EVENT_ID: 28
+OBJECT_SCHEMA: atguigu
+OBJECT_NAME: user
+PARTITION_NAME: NULL
+SUBPARTITION_NAME: NULL
+INDEX_NAME: PRIMARY
+OBJECT_INSTANCE_BEGIN: 139747028813248
+LOCK_TYPE: RECORD
+LOCK_MODE: X,REC_NOT_GAP
+LOCK_STATUS: GRANTED
+LOCK_DATA: 1
+4 rows in set (0.00 sec)
+
+ERROR:
+No query specified
+```
+
+从锁的情况可以看出来，两个事务分别获取了IX锁，我们从意向锁章节可以知道，IX锁互相时兼容的。所以这里不会等待，但是事务1同样持有X锁，此时事务2也要去同一行记录获取X锁，他们之间不兼容，导致等待的情况发生。

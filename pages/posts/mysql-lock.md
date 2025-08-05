@@ -962,11 +962,64 @@ update items set quantity = quantity-num where id = 1001;
 
 如果没有索引，表锁会加在整个表上，可能导致不必要的性能损耗。
 
->Select是否加锁
-- 在 REPEATABLE READ 或 SERIALIZABLE 隔离级别下，MySQL 会为读取的行加 共享锁，确保在同一事务内读取的数据不会发生变化（避免幻读）。但是，这只是为了保证数据一致性，不会阻止其他事务的读取，只会阻止写入。
-
-- 在 READ COMMITTED 隔离级别下，不会加任何锁，可能会导致 脏读（读取到其他事务未提交的数据）。
 :::
+
+##### select是否加锁
+1. 不加锁的情况（快照读）
+
+在`READ COMMITTED`和`REPEATABLE READ`隔离级别下
+```sql
+-- 这些SELECT语句都不加锁
+SELECT * FROM users WHERE id = 1;
+SELECT * FROM orders WHERE user_id = 123;
+SELECT COUNT(*) FROM products;
+SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id;
+
+```
+>原理：使用MVCC机制，读取数据的历史版本（快照），不会阻塞其他事务的写操作。
+
+实际测试验证
+```sql
+-- 会话1：开启事务并修改数据
+BEGIN;
+UPDATE users SET name = 'New Name' WHERE id = 1;
+-- 注意：不要COMMIT
+
+-- 会话2：同时查询（不会被阻塞）
+SELECT * FROM users WHERE id = 1;  -- 立即返回旧数据
+--  不会等待，直接返回修改前的数据
+
+```
+
+2. 加锁的情况
+
+A. `SERIALIZABLE`隔离级别下
+```sql
+-- 设置最高隔离级别
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+-- 现在普通SELECT也会加锁
+SELECT * FROM users WHERE id = 1;
+-- 🔒 自动加共享锁（S锁）
+
+```
+B. 显式锁定读语句
+```sql
+-- 排他锁（写锁）
+SELECT * FROM users WHERE id = 1 FOR UPDATE;
+-- 🔒 加排他锁，其他事务无法读写此行
+
+-- 共享锁（读锁）
+SELECT * FROM users WHERE id = 1 FOR SHARE;
+SELECT * FROM users WHERE id = 1 LOCK IN SHARE MODE;  -- 旧语法
+-- 🔒 加共享锁，其他事务可以读但不能写
+
+```
+
+**不同存储引擎的表现**
+
+- `InnoDB`存储引擎（默认），普通SELECT不加锁，使用`MVCC`
+- `MyISAM`存储引擎，MyISAM只支持表级锁，读操作不加锁，但写操作会锁整个表
 
 #### 乐观锁
 
@@ -1066,7 +1119,7 @@ mysql> begin;
 Query OK, 0 rows affected (0.00 sec)
 mysql> select * from student lock in share mode; #执行完，当前事务被阻塞
 ```
-session 3: 
+session 3:
 
 执行下述语句，输出结果：
 ```sql
@@ -1117,6 +1170,12 @@ select .... for update
 
 ### 其它锁之：全局锁
 
+全局锁就是对 `整个数据库实例` 加锁。当你需要让整个库处于 `只读状态` 的时候，可以使用这个命令，之后 其他线程的以下语句会被阻塞：数据更新语句（数据的增删改）、数据定义语句（包括建表、修改表结构等）和更新类事务的提交语句。全局锁的典型使用`场景` 是：做`全库逻辑备份` 。
+
+全局锁的命令：
+```sql
+Flush tables with read lock
+```
 
 
 
@@ -1147,7 +1206,7 @@ update account set balance = balance - 100 where name = 'B';  #操作2
 update account set balance = balance + 100 where name = 'A';  #操作4
 ```
 
-<img src="https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_21-41-51.png " 
+<img src="https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-04_21-41-51.png "
      style="width: 100%; max-width: 300px;" />
 
 **产生死锁的必要条件**
@@ -1188,7 +1247,7 @@ update account set balance = balance + 100 where name = 'A';  #操作4
 
 **如何解决？**
 
-方式1：关闭死锁检测，但意味着可能会出现大量的超时，会导致业务有损。  
+方式1：关闭死锁检测，但意味着可能会出现大量的超时，会导致业务有损。
 
 方式2：控制并发访问的数量。比如在中间件中实现对于相同行的更新，在进入引擎之前排队，这样在InnoDB内部就不会有大量的死锁检测工作。
 

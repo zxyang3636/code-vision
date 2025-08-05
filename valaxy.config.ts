@@ -45,12 +45,12 @@ export default defineValaxyConfig<UserThemeConfig>({
         icon: "i-ri-group-fill",
         color: "dodgerblue",
       },
-      // {
-      //   name: '喜欢的女孩子',
-      //   url: '/girls/',
-      //   icon: 'i-ri-women-line',
-      //   color: 'hotpink',
-      // },
+      {
+        name: '导航',
+        url: '/links/navigation/',
+        icon: 'i-ri-compass-3-line',
+        color: 'dodgerblue',
+      },
     ],
 
     footer: {

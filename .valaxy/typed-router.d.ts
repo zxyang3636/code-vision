@@ -26,6 +26,7 @@ declare module 'vue-router/auto-routes' {
     '/archives/': RouteRecordInfo<'/archives/', '/archives', Record<never, never>, Record<never, never>>,
     '/categories/': RouteRecordInfo<'/categories/', '/categories', Record<never, never>, Record<never, never>>,
     '/links/': RouteRecordInfo<'/links/', '/links', Record<never, never>, Record<never, never>>,
+    '/links/navigation': RouteRecordInfo<'/links/navigation', '/links/navigation', Record<never, never>, Record<never, never>>,
     '/page/[page]': RouteRecordInfo<'/page/[page]', '/page/:page', { page: ParamValue<true> }, { page: ParamValue<false> }>,
     '/posts/': RouteRecordInfo<'/posts/', '/posts', Record<never, never>, Record<never, never>>,
     '/posts/docker-s': RouteRecordInfo<'/posts/docker-s', '/posts/docker-s', Record<never, never>, Record<never, never>>,

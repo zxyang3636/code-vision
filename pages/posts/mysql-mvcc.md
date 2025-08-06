@@ -155,7 +155,7 @@ trx_ids 为 trx2、trx3、trx5 和 trx8 的集合，系统的最大事务 ID（l
 ![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-05_22-28-51.png)
 
 
-**ReadView的规则**
+#### **ReadView的规则**
 
 有了这个ReadView，这样在访问某条记录时，只需要按照下边的步骤判断记录的某个版本是否可见。
 
@@ -413,3 +413,72 @@ SELECT * FROM student WHERE id = 1; # 得到的列name的值仍为'张三'
 这次SELECT查询得到的结果是重复的，记录的列c值都是张三，这就是可重复读的含义。如果我们之后再把事务id为20的记录提交了，然后再到刚才使用REPEATABLE READ隔离级别的事务中继续查找这个id为1的记录，得到的结果还是张三，具体执行过程大家可以自己分析一下。
 
 
+
+
+
+
+#### 如何解决幻读
+接下来说明InnoDB 是如何解决幻读的 (以下都是基于RR隔离级别)。
+
+假设现在表 student 中只有一条数据，数据内容中，主键 id=1，隐藏的 trx_id=10，它的 undo log 如下图所示。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-06_21-03-21.png)
+
+假设现在有事务 A 和事务 B 并发执行，`事务 A` 的事务 `id` 为 `20` ， `事务 B` 的事务 `id` 为 `30` 。
+
+步骤1：事务 A 开始第一次查询数据，查询的 SQL 语句如下。
+```sql
+select * from student where id >= 1;
+```
+
+在开始查询之前，MySQL 会为事务 A 产生一个 ReadView，此时 `ReadView` 的内容如下： `trx_ids= [20,30]`， `up_limit_id=20` ， `low_limit_id=31` ， `creator_trx_id=20` 。
+
+由于此时表 student 中只有一条数据，且符合 where id>=1 条件，因此会查询出来。然后根据 ReadView 机制，发现该行数据的trx_id=10，小于事务 A 的 ReadView 里 up_limit_id，这表示这条数据是事务 A 开启之前，其他事务就已经提交了的数据，因此事务 A 可以读取到。
+
+结论：事务 A 的第一次查询，能读取到一条数据，id=1。
+
+步骤2：接着事务 B(trx_id=30)，往表 student 中新插入两条数据，并提交事务。
+```sql
+insert into student(id,name) values(2,'李四');
+insert into student(id,name) values(3,'王五');
+```
+
+此时表student 中就有三条数据了，对应的 undo 如下图所示：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-06_21-06-03.png)
+步骤3：接着事务 A 开启第二次查询，根据可重复读隔离级别的规则，此时事务 A 并不会再重新生成 ReadView。此时表 `student` 中的 3 条数据都满足 `where id>=1` 的条件，因此会先查出来。然后根据 ReadView 机制，判断每条数据是不是都可以被事务 A 看到。
+
+1）首先 `id=1` 的这条数据，前面已经说过了，可以被`事务 A` 看到。
+
+2）然后是 `id=2` 的数据，它的 `trx_id=30`，此时`事务 A` 发现，这个值处于 `up_limit_id` 和 `low_limit_id` 之间，因此还需要再判断 30 是否处于 `trx_ids` 数组内。由于`事务 A`的 `trx_ids=[20,30]`，因此在数组内，这表示 `id=2` 的这条数据是与`事务 A` 在同一时刻启动的其他事务提交的，所以这条数据不能让`事务 A` 看到。
+
+3）同理，`id=3` 的这条数据，`trx_id` 也为 30，因此也不能被事务 A 看见。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-06_21-08-12.png)
+
+结论：最终事务 A 的第二次查询，只能查询出 id=1 的这条数据。这和事务 A 的第一次查询的结果是一样 的，因此没有出现幻读现象，所以说在 MySQL 的可重复读隔离级别下，不存在幻读问题。
+
+
+### 总结
+
+这里介绍了 `MVCC` 在 `READ COMMITTD` 、 `REPEATABLE READ` 这两种隔离级别的事务在执行快照读操作时 访问记录的版本链的过程。这样使不同事务的 `读-写` 、 `写-读` 操作并发执行，从而提升系统性能。
+
+核心点在于 `ReadView` 的原理， `READ COMMITTD` 、 `REPEATABLE READ` 这两个隔离级别的一个很大不同 就是生成ReadView的时机不同：
+
+- `READ COMMITTD` 在每一次进行普通SELECT操作前都会生成一个ReadView
+- `REPEATABLE READ` 只在第一次进行普通SELECT操作前生成一个ReadView，之后的查询操作都重复 使用这个ReadView就好了。
+
+>说明:我们之前说执行DELETE语句或者更新主键的UPDATE语句并不会立即把对应的记录完全从页面中删除,而是执行一个所谓的delete mark操作,相当于只是对记录打上了一个删除标志位,这主要就是为MVCC服务的。
+
+通过MVCC我们可以解决：
+1. **读写之间阻塞的问题**。通过 MVCC 可以让读写互相不阻塞，即读不阻塞写，写不阻塞读，这样就可以提升事务并发处理能力。
+2. **降低了死锁的概率**。这是因为 MVCC 采用了乐观锁的方式，读取数据时并不需要加锁，对于写操作，也只锁定必要的行。
+3. **解决快照读的问题**。当我们查询数据库在某个时间点的快照时，只能看到这个时间点之前事务提交更新的结果，而不能看到这个时间点之后事务提交的更新结果。
+
+
+
+
+> 重点：ReadView规则，MVCC操作流程
+
+简单来讲：
+MVCC = 两个隐藏列 + undo log版本链 + ReadView
+
+undo log控制版本、ReadView并发控制及管理

@@ -363,3 +363,215 @@ Java
 - `jps` 命令查看所有 Java 进程
 - `jstack <PID>` 查看某个 Java 进程（PID）在运行 jstack 时的所有线程状态
 - `jconsole` 来查看某个 Java 进程中线程的运行情况（图形界面）
+
+
+**Jconsole 使用**
+
+jconsole 远程监控需要先进行如下配置： 
+
+需要以如下方式运行你的 java 类(在服务器上执行的命令)
+```
+java -Djava.rmi.server.hostname=ip地址 -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=连接端口 -Dcom.sun.management.jmxremote.ssl=是否安全连接 -Dcom.sun.management.jmxremote.authenticate=是否认证 java类
+```
+
+在windows环境下，cmd中输入`jconsole`，连接远程的服务器即可，例如`192.168.1.100:1099`；要有ip加端口号进行连接。
+
+## 线程运行的原理
+[原理视频](https://www.bilibili.com/video/BV16J411h7Rd?spm_id_from=333.788.videopod.episodes&vd_source=da7c7c4a886275716b7ca33f532f1905&p=21)
+
+### 栈和栈帧
+
+Java Virtual Machine Stacks（Java 虚拟机栈） 
+
+我们都知道 **JVM 中由堆、栈、方法区所组成**，其中栈内存是给谁用的呢？其实就是线程 (对象都是在堆中创建的)，每个线程启动后，虚拟机就会为其分配一块栈内存。 
+- 每个栈由多个栈帧（Frame）组成，对应着每次方法调用时所占用的内存 
+- 每个线程只能有一个活动栈帧，对应着当前正在执行的那个方法 
+
+在idea中debug的时候，就能看到栈帧信息；每执行一个方法就会生成一个栈帧，一个线程的栈中可以有多个栈帧（对应方法调用链，如 main → methodA → methodB）。
+
+**栈帧是先进后出**；
+
+**每个线程都有自己独立的栈**；这个栈是线程私有的，与其他线程隔离。
+### 线程上下文切换
+
+Thread Context Switch（线程上下文切换）
+
+
+以下一些原因会导致 CPU 不再执行当前的线程，转而执行另一个线程的代码：
+1. 线程的 cpu 时间片用完
+2. 垃圾回收（会暂停当前所有的工作线程，让垃圾回收的线程来运行）
+3. 有更高优先级的线程需要运行
+4. 线程自发调用了 sleep()、yield()、wait()、join()、park()、synchronized、lock() 等方法
+
+当上下文切换发生时，需要由操作系统保存当前线程的状态，并恢复另一个线程的状态，Java 中对应的概念就是**程序计数器（Program Counter Register）**，它的作用是记住下一条 jvm 指令的执行地址，它是线程私有的 
+- 状态包括程序计数器、虚拟机栈中每个栈帧的信息，如局部变量、操作数栈、返回地址等 
+- 频繁的上下文切换会影响性能
+
+
+### 相关面试题🤏🏻
+
+
+**什么是线程上下文切换？**
+
+线程在执行过程中会有自己的运行条件和状态（也称上下文），比如程序计数器，栈信息等。当出现如下情况的时候，线程会从占用 CPU 状态中退出。
+- 主动让出 CPU，比如调用了sleep(), wait() 等。
+- 时间片用完，因为操作系统要防止一个线程或者进程长时间占用 CPU 导致其他线程或者进程饿死。
+- 调用了阻塞类型的系统中断，比如请求 IO，线程被阻塞。
+- 被终止或结束运行
+
+这其中前三种都会发生线程切换，线程切换意味着需要保存当前线程的上下文，留待线程下次占用 CPU 的时候恢复现场。并加载下一个将要占用 CPU 的线程上下文。这就是所谓的 **上下文切换**。
+
+上下文切换是现代操作系统的基本功能，因其每次需要保存信息恢复信息，这将会占用 CPU，内存等系统资源进行处理，也就意味着效率会有一定损耗，如果频繁切换就会造成整体效率低下。
+
+
+:::tip
+**“时间片用完”**
+
+“时间片”（Time Slice）是操作系统分配给每个线程/进程的一小段 CPU 使用时间，比如 10 毫秒。
+当一个线程开始运行，它只能使用 CPU 一段时间（即这个“时间片”）。
+一旦这个时间到了，时间片用完，操作系统就会中断它，进行调度。这种机制叫做 **时间片轮转调度**（Round-Robin Scheduling）, 时间片的长度由操作系统决定，通常是几毫秒到几十毫秒
+
+**“导致其他线程或进程饿死”**
+
+“饿死”（Starvation）是一个术语，意思是：某些线程长期得不到 CPU 时间，无法执行。
+
+比如你有 10
+个线程，但有一个“霸道”线程一直运行，其他 9 个一直等，永远等不到机会 —— 它们就“饿死了”。
+
+:::
+
+
+
+### 线程常见方法
+
+| 方法名 | 是否是静态方法 | 功能说明 | 注意
+| --- | --- | --- | ---
+| start() |  | 启动一个新线程，在新的线程运行 run 方法中的代码 | start 方法只是让线程进入就绪，里面代码不一定立刻运行（CPU 的时间片还没分给它）。每个线程对象的 start 方法只能调用一次，如果调用了多次会出现 IllegalThreadStateException
+| run() |  | 新线程启动后会调用的方法 | 如果在构造 Thread 对象时传递了 Runnable 参数，则线程启动后会调用 Runnable 中的 run 方法，否则默认不执行任何操作。但可以创建 Thread 的子类对象，来覆盖默认行为
+| join() |  | 等待线程运行结束 | 
+| join(long n) |  | 等待线程运行结束,最多等待 n 毫秒 | 
+| getId() |  | 获取线程长整型的 id | id 唯一
+| getName() |  | 获取线程名 | 
+| setName(String) |  | 修改线程名 | 
+| getPriority() |  | 获取线程优先级 | 
+| setPriority(int) |  | 修改线程优先级 | java 中规定线程优先级是 1~10 的整数，较大的优先级能提高该线程被 CPU 调度的机率
+| getState() |  | 获取线程状态 | Java 中线程状态是用 6 个 enum 表示，分别为：NEW, RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, TERMINATED
+| isInterrupted() |  | 判断是否被打断， | 不会清除 打断标记
+| isAlive() |  | 线程是否存活（还没有运行完毕） | 
+| interrupt() |  | 打断线程 | 如果被打断线程正在 sleep，wait，join 会导致被打断的线程抛出 InterruptedException，并清除 打断标记；如果打断的正在运行的线程，则会设置 打断标记；park 的线程被打断，也会设置 打断标记
+| interrupted() | static | 判断当前线程是否被打断 | 会清除 打断标记
+| currentThread() | static | 获取当前正在执行的线程 | 
+| sleep(long n) | static | 让当前执行的线程休眠n毫秒，休眠时让出 cpu 的时间片给其它线程 |                  |
+| yield()     | static | 提示线程调度器让出当前线程对 CPU 的使用 | 主要是为了测试和调试 |
+
+
+还有一些不推荐使用的方法，这些方法已过时，容易破坏同步代码块，造成线程死锁
+| 方法名|是否是静态方法|功能说明
+|:----:|:----:|:----:|
+|stop()|N|停止线程运行|
+|suspend()|N|挂起（暂停）线程运行|
+|resume()|N|恢复线程运行|
+
+### start、run
+结论：
+1. 直接调用run()方法，相当于**同步**。是在主线程中执行run()方法，并没有启动新的线程来执行！
+2. 通过start()方法来启动线程，相当于**异步**。通过新的线程来间接执行run()中的代码！
+
+start用来启动线程，run是线程启动后，要执行的方法。
+
+start方法只是让线程进入就绪，里面代码不一定立刻运行（CPU 的时间片还没分给它）。每个线程对象的 start 方法只能调用一次，如果调用了多次会出现 IllegalThreadStateException。
+
+
+直接调用run的话不会生成一个新的线程 而是在当前的线程里面执行。直接调用run方法，相当于是同步的，不是异步了
+
+两者区别代码演示如下：
+```java
+@Slf4j(topic = "c.Test4")
+public class ThreadRunTest {
+
+    public static void main(String[] args) {
+        Thread t1 = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                log.debug("running...");
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "t1");
+
+        t1.run();
+        log.debug("do other things...");
+    }
+}
+```
+```java
+22:36:54.587 c.Test4 [main] - running...
+22:36:56.596 c.Test4 [main] - do other things...
+```
+我们发现线程一直在【main】线程中执行，run()方法调用还是同步的。
+
+```java
+@Slf4j(topic = "c.Test4")
+public class ThreadRunTest {
+
+    public static void main(String[] args) {
+        Thread t1 = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                log.debug("running...");
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "t1");
+
+        // 将 run() 改成 start() 	
+        t1.start();
+        log.debug("do other things...");
+    }
+}
+```
+```java
+22:47:58.687 c.Test4 [main] - do other things...
+22:47:58.687 c.Test4 [t1] - running...
+```
+我们发现run()方法中的代码在t1线程中执行，是异步调用的。
+
+
+**线程执行前后状态信息变化**
+
+```java
+@Slf4j(topic = "c.Test5")
+public class ThreadStateTest {
+    public static void main(String[] args) {
+        Thread t1 = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                log.debug("running...");
+            }
+        }, "t1");
+
+        // 查看线程执行前后的状态信息
+        System.out.println(t1.getState());
+        t1.start();
+//        t1.start();   不能被多次调用，否则会报错
+        System.out.println(t1.getState());
+    }
+}
+```
+```java
+NEW  
+RUNNABLE
+22:55:49.182 c.Test5 [t1] - running...
+```
+
+:::info
+- NEW：初始状态，线程被创建出来但没有被调用start() 。
+- RUNNABLE：运行状态，线程被调用了start()等待运行的状态。
+:::
+不调start就是初始状态，调用了start就是runnable

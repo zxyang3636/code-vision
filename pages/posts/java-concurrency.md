@@ -442,7 +442,7 @@ Thread Context Switch（线程上下文切换）
 
 
 
-### 线程常见方法
+## 线程常见方法
 
 | 方法名 | 是否是静态方法 | 功能说明 | 注意
 | --- | --- | --- | ---
@@ -575,3 +575,501 @@ RUNNABLE
 - RUNNABLE：运行状态，线程被调用了start()等待运行的状态。
 :::
 不调start就是初始状态，调用了start就是runnable
+
+### sleep()
+**sleep()方法**
+1. 调用`sleep()`会让当前线程从 `Running` 状态进入 `Timed Waiting` 状态（运行 -> 阻塞） 
+2. 其它线程可以用interrupt方法打断正在睡眠的线程，这时`sleep()`会抛出`InterruptedException`
+3. 睡眠结束后的线程未必会立刻得到执行 (cpu有可能正在执行其他线程的代码，等到任务调度器把新的时间片分给该线程，才会继续运行)
+4. 建议用TimeUnit的sleep代替Thread的sleep来获得更好的可读性 
+5. sleep() 会让出 CPU 资源，进入“阻塞”状态。但不释放锁; 
+```java
+@Slf4j
+public class TestSleep {
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            try {
+                TimeUnit.SECONDS.sleep(2);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }, "t1");
+
+        t1.start();
+        log.info("t1:{}", t1.getState());
+        TimeUnit.MILLISECONDS.sleep(500);
+        log.info("t1:{}", t1.getState());
+    }
+}
+```
+```
+20:56:18.937 [main] INFO com.thread.concurrent1.TestSleep -- t1:RUNNABLE
+20:56:19.448 [main] INFO com.thread.concurrent1.TestSleep -- t1:TIMED_WAITING
+```
+
+*interrupt() 方法演示*
+```java
+@Slf4j
+public class TestSleep {
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            try {
+                TimeUnit.SECONDS.sleep(2);
+            } catch (InterruptedException e) {
+                log.info("wake up");
+                throw new RuntimeException(e);
+            }
+        }, "t1");
+
+        t1.start();
+        TimeUnit.SECONDS.sleep(1);
+        log.info("interrupted...");
+        t1.interrupt();
+    }
+}
+```
+```
+21:01:29.040 [main] INFO com.thread.concurrent1.TestSleep -- interrupted...
+21:01:29.043 [t1] INFO com.thread.concurrent1.TestSleep -- wake up
+Exception in thread "t1" java.lang.RuntimeException: java.lang.InterruptedException: sleep interrupted
+	at com.thread.concurrent1.TestSleep.lambda$main$0(TestSleep.java:23)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+Caused by: java.lang.InterruptedException: sleep interrupted
+	at java.base/java.lang.Thread.sleep0(Native Method)
+	at java.base/java.lang.Thread.sleep(Thread.java:558)
+	at java.base/java.util.concurrent.TimeUnit.sleep(TimeUnit.java:446)
+	at com.thread.concurrent1.TestSleep.lambda$main$0(TestSleep.java:20)
+	... 1 more
+```
+
+
+
+### yield()
+**yield()方法**
+1. 调用yield()会让当前线程从 Running 状态进入 Runnable 就绪状态，然后调度执行其它线程
+2. 具体的实现依赖于操作系统的任务调度器 （有可能没有其他线程需要使用cpu时间片，那么系统又把执行权交给你了）
+3. 和sleep()一样，不会释放任何已持有的锁（如 synchronized）
+
+
+就绪状态(yield)有机会获得时间片，阻塞状态(sleep)不能获得时间片
+
+
+### 线程优先级
+
+`setPrority(int newPrority)`：设置线程优先级
+- 线程优先级会提示（hint）调度器优先调度该线程，但它仅仅是一个提示，调度器可以忽略它
+- 如果 cpu 比较忙，那么优先级高的线程会获得更多的时间片，但 cpu 闲时，优先级几乎没作用
+
+
+```java
+@Slf4j
+public class TestPrority {
+    public static void main(String[] args) {
+        Runnable task1 = () -> {
+            int count = 0;
+            for (; ; ) {
+                System.out.println("---->1 " + count++);
+            }
+        };
+        Runnable task2 = () -> {
+            int count = 0;
+            for (; ; ) {
+                // Thread.yield();
+                System.out.println("              ---->2 " + count++);
+            }
+        };
+        Thread t1 = new Thread(task1, "t1");
+        Thread t2 = new Thread(task2, "t2");
+        // t1.setPriority(Thread.MIN_PRIORITY);
+        // t2.setPriority(Thread.MAX_PRIORITY);
+        t1.start();
+        t2.start();
+    }
+}
+```
+```
+---->1 173105
+---->1 173106
+---->1 173107
+---->1 173108
+---->1 173109
+---->1 173110
+              ---->2 171147
+              ---->2 171148
+              ---->2 171149
+              ---->2 171150
+              ---->2 171151
+```
+我们可以看出输出的数字都是比较相近的
+
+```java
+@Slf4j
+public class TestPrority {
+    public static void main(String[] args) {
+        Runnable task1 = () -> {
+            int count = 0;
+            for (; ; ) {
+                System.out.println("---->1 " + count++);
+            }
+        };
+        Runnable task2 = () -> {
+            int count = 0;
+            for (; ; ) {
+                Thread.yield();
+                System.out.println("              ---->2 " + count++);
+            }
+        };
+        Thread t1 = new Thread(task1, "t1");
+        Thread t2 = new Thread(task2, "t2");
+        // t1.setPriority(Thread.MIN_PRIORITY);
+        // t2.setPriority(Thread.MAX_PRIORITY);
+        t1.start();
+        t2.start();
+    }
+}
+```
+```
+---->1 167177
+---->1 167178
+---->1 167179
+---->1 167180
+---->1 167181
+---->1 167182
+---->1 167183
+---->1 167184
+---->1 167185
+---->1 167186
+              ---->2 79648
+              ---->2 79649
+              ---->2 79650
+              ---->2 79651
+              ---->2 79652
+              ---->2 79653
+              ---->2 79654
+              ---->2 79655
+```
+因为有yield的存在，相差很大
+
+---
+
+```java
+@Slf4j
+public class TestPrority {
+    public static void main(String[] args) {
+        Runnable task1 = () -> {
+            int count = 0;
+            for (; ; ) {
+                System.out.println("---->1 " + count++);
+            }
+        };
+        Runnable task2 = () -> {
+            int count = 0;
+            for (; ; ) {
+//                Thread.yield();
+                System.out.println("              ---->2 " + count++);
+            }
+        };
+        Thread t1 = new Thread(task1, "t1");
+        Thread t2 = new Thread(task2, "t2");
+         t1.setPriority(Thread.MIN_PRIORITY);
+         t2.setPriority(Thread.MAX_PRIORITY);
+        t1.start();
+        t2.start();
+    }
+}
+```
+```
+---->1 117769
+---->1 117770
+---->1 117771
+---->1 117772
+---->1 117773
+---->1 117774
+---->1 117775
+---->1 117776
+---->1 117777
+---->1 117778
+---->1 117779
+---->1 117780
+              ---->2 125324
+              ---->2 125325
+              ---->2 125326
+              ---->2 125327
+              ---->2 125328
+              ---->2 125329
+              ---->2 125330
+              ---->2 125331
+              ---->2 125332
+              ---->2 125333
+              ---->2 125334
+              ---->2 125335
+              ---->2 125336
+              ---->2 125337
+              ---->2 125338
+```
+优先级的存在，也会相差比较大
+
+>总结：
+>
+>不管是 yield() 还是优先级，他们都不能真正的去控制线程的调度，最终还是由操作系统的任务调度器来决定具体哪个线程分到更多的时间片。
+
+
+#### 应用 —— 解除对 CPU 的使用
+
+sleep() 实现
+
+在没有利用 `CPU` 来计算时，不要让`while(true)`空转浪费 `CPU`，这时可以使用`yield()`或 `sleep()` 方法来让出 `CPU` 的使用权给其他的程序！
+```java
+while(true) {
+    try {
+        Thread.sleep(50);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+Linux 下可通过 top 命令来查看对 CPU 的占用率。
+
+1. 在单核 CPU 下，此代码对 CPU 的占用率高达 90%。其他程序几乎用不上此 CPU。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-13_21-46-57.png)
+
+2. 在单核 CPU 下，加上sleep()方法睡眠后，Java 程序对 CPU 的占用大大降低，避免空转占用 CPU。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-13_21-48-08.png)
+
+
+
+- 可以用wait()或条件变量达到类似的效果
+- 不同的是，后两种都需要加锁，并且需要相应的唤醒操作，一般适用于要进行同步的场景
+- sleep()适用于无需锁同步的场景
+
+### join()
+
+
+#### 为什么需要join()
+下面的代码，打印出来的r值是多少？
+```java
+static int r = 0;
+public static void main(String[] args) throws InterruptedException {
+    test1();
+}
+
+private static void test1() throws InterruptedException {
+    log.debug("开始");
+    Thread t1 = new Thread(() -> {
+        log.debug("开始");
+        sleep(1);
+        log.debug("结束");
+        r = 10;
+    });
+    t1.start();
+    log.debug("结果为:{}", r);
+    log.debug("结束");
+}
+```
+输出：
+```
+23:07:21.660 c.Test10 [main] - 开始
+23:07:21.663 c.Test10 [Thread-0] - 开始
+23:07:21.663 c.Test10 [main] - 结果为:0
+23:07:21.664 c.Test10 [main] - 结束
+23:07:22.670 c.Test10 [Thread-0] - 结束
+```
+分析：
+- 因为主线程和线程 t1 是并行执行的，t1 线程需要 1 秒之后才能算出 r=10 
+- 而主线程一开始就要打印 r 的结果，所以就会打印出 r=0
+
+解决方法：
+- 用join()，加在 t1.start() 之后即可
+```java
+@Slf4j(topic = "c.Test10")
+public class Test10 {
+    static int r = 0;
+    public static void main(String[] args) throws InterruptedException {
+        test1();
+    }
+
+    private static void test1() throws InterruptedException {
+        log.debug("开始");
+        Thread t1 = new Thread(() -> {
+            log.debug("开始");
+            sleep(1);
+            log.debug("结束");
+            r = 10;
+        });
+        t1.start();
+        
+        // 哪个线程调用就等待哪个线程结束 (t1线程调用就等待t1线程结束)
+        // 主线程等待 t1 线程结束
+        t1.join();
+
+        
+        log.debug("结果为:{}", r);
+        log.debug("结束");
+    }
+}
+```
+
+
+#### 同步应用
+
+以调用方角度来讲，如果
+- 需要等待结果返回，才能继续运行就是同步 
+- 不需要等待结果返回，就能继续运行就是异步
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-13_22-17-27.png)
+
+**等待多个线程结果**
+
+问：下面代码 cost 大约多少秒？
+ 答：2s 左右
+
+```java
+static int r1 = 0;
+static int r2 = 0;
+public static void main(String[] args) throws InterruptedException {
+    test2();
+}
+private static void test2() throws InterruptedException {
+    Thread t1 = new Thread(() -> {
+        sleep(1);
+        r1 = 10;
+    });
+    Thread t2 = new Thread(() -> {
+        sleep(2);
+        r2 = 20;
+    });
+    long start = System.currentTimeMillis();
+    t1.start();
+    t2.start();
+    t1.join();
+    t2.join();
+    long end = System.currentTimeMillis();
+    log.debug("r1: {} r2: {} cost: {}", r1, r2, end - start);
+}
+```
+输出：
+```
+23:35:51.088 c.TestJoin [main] - r1: 10 r2: 20 cost: 2006
+```
+分析：
+- 第一个 join：等待 t1 时, t2 并没有停止, 而在运行 
+- 第二个 join：1s 后, 执行到此, t2 也运行了 1s, 因此也只需再等待 1s 
+
+如果颠倒两个 join 呢？ 
+
+最终都是输出：`20:45:43.239 [main] c.TestJoin - r1: 10 r2: 20 cost: 2005`
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-13_22-19-28.png)
+
+
+
+#### 有时效的join()
+1. 如果等够时间，会提前结束join()的等待。
+2. 如果没等够时间，则主线程继续往下执行，无影响。
+
+等够时间
+```java
+@Slf4j
+public class Test1 {
+    static int r1 = 0;
+    static int r2 = 0;
+    public static void main(String[] args) throws InterruptedException {
+        test3();
+    }
+
+    public static void test3() throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            try {
+                sleep(2000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            r1 = 10;
+        });
+        long start = System.currentTimeMillis();
+        t1.start();
+        // 线程执行结束会导致 join 结束
+        t1.join(3000);
+        long end = System.currentTimeMillis();
+        log.info("r1: {} r2: {} cost: {}", r1, r2, end - start);
+    }
+}
+```
+```
+22:32:19.077 [main] INFO com.thread.concurrent1.Test1 -- r1: 10 r2: 0 cost: 2013
+```
+
+没等够时间
+```java
+@Slf4j
+public class Test1 {
+    static int r1 = 0;
+    static int r2 = 0;
+    public static void main(String[] args) throws InterruptedException {
+        test3();
+    }
+
+    public static void test3() throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            try {
+                sleep(2000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            r1 = 10;
+        });
+        long start = System.currentTimeMillis();
+        t1.start();
+        // 线程执行结束会导致 join 结束
+        t1.join(1500);
+        long end = System.currentTimeMillis();
+        log.info("r1: {} r2: {} cost: {}", r1, r2, end - start);
+    }
+}
+```
+```
+22:31:05.884 [main] INFO com.thread.concurrent1.Test1 -- r1: 0 r2: 0 cost: 1505
+```
+
+>等朋友,五分钟你不下来,我就走了
+
+
+
+
+
+### interrupt
+
+#### interrupt打断阻塞
+
+打断等待状态/阻塞状态的线程, 会抛出异常信息表示被打断，此时会清空打断状态，打断状态为false
+```java
+@Slf4j
+public class Test2 {
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }, "t1");
+        t1.start();
+
+        Thread.sleep(1000);
+
+        t1.interrupt();
+        log.info("打断标记:{}", t1.isInterrupted());  // isInterrupted()  判断线程是否被打断 | true：被打断  false：未被打断
+    }
+}
+```
+```
+Exception in thread "t1" java.lang.RuntimeException: java.lang.InterruptedException: sleep interrupted
+	at com.thread.concurrent1.Test2.lambda$main$0(Test2.java:20)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+Caused by: java.lang.InterruptedException: sleep interrupted
+	at java.base/java.lang.Thread.sleep0(Native Method)
+	at java.base/java.lang.Thread.sleep(Thread.java:509)
+	at com.thread.concurrent1.Test2.lambda$main$0(Test2.java:18)
+	... 1 more
+22:42:56.962 [main] INFO com.thread.concurrent1.Test2 -- 打断标记:false
+```
+

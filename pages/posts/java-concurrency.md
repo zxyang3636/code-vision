@@ -1073,3 +1073,322 @@ Caused by: java.lang.InterruptedException: sleep interrupted
 22:42:56.962 [main] INFO com.thread.concurrent1.Test2 -- 打断标记:false
 ```
 
+#### 打断运行状态的线程
+
+
+```java
+@Slf4j
+public class Test3 {
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            while (true) {
+                boolean interrupted = Thread.currentThread().isInterrupted();
+                if (interrupted) {
+                    log.info("被打断了");
+                    break;
+                }
+            }
+        }, "t1");
+        t1.start();
+        Thread.sleep(1000);
+        log.info("interrupt...");
+        t1.interrupt();
+    }
+}
+```
+```
+21:49:42.708 [main] INFO com.thread.concurrent1.Test3 -- interrupt...
+21:49:42.711 [t1] INFO com.thread.concurrent1.Test3 -- 被打断了
+```
+
+#### 设计模式 - 两阶段终止
+
+两阶段终止（Two Phase Termination）
+
+
+**场景：**
+>有两个线程t1、t2。如何在线程t1中优雅的终止t2？
+>
+>【优雅】指的是给t2料理后事的机会
+
+**错误思路：**
+
+1. 使用线程对象的`stop()`方法停止线程 
+  - `stop()`方法会真正杀死线程，如果这时线程锁住了共享资源，那么当它被杀死后就没有机会释放锁，其它线程将永远无法获取这个锁
+2. 使用`System.exit(int)`方法停止线程 
+  - 目的仅是停止一个线程，但这种方法会让整个程序都停止
+
+**正确做法：**
+- 使用两阶段终止模式来优雅的结束线程
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-14_21-56-11.png)
+
+
+
+**interrupt() 实现**
+
+```java
+public class Test4 {
+    public static void main(String[] args) throws InterruptedException {
+        TwoPhaseTermination twoPhaseTermination = new TwoPhaseTermination();
+        twoPhaseTermination.start();
+        Thread.sleep(3500);
+        twoPhaseTermination.stop();
+    }
+}
+
+@Slf4j
+class TwoPhaseTermination {
+    private Thread monitor;
+
+    public void start() {
+        monitor = new Thread(() -> {
+            while (true) {
+                Thread currentThread = Thread.currentThread();
+                if (currentThread.isInterrupted()) {
+                    log.info("料理后事");
+                    break;
+                }
+                try {
+                    Thread.sleep(1000);
+                    log.info("监控中。。。");
+                } catch (InterruptedException e) {
+                    // 重置打断标记 因为 sleep() 方法被打断后，会抛出异常信息并清除打断标记，此时打断标记是 false。需要重新打断一次
+                    currentThread.interrupt();
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+        monitor.start();
+    }
+
+    public void stop() {
+        monitor.interrupt();
+    }
+}
+```
+
+#### 打断park
+
+park() 方法：阻塞线程
+
+- park()不是 Thread 类中提供的方法，是LockSupport工具类中提供的方法。
+- 作用也是让当前线程停下来，进入阻塞状态
+- 可以通过interrupt()方法来打断正在park的线程，打断状态变为true
+- park()是不可重入的。一旦打断状态变为true后，再次调用interrupt()方法会失效。一个线程不可多次调用park()
+
+
+
+1. `LockSupport.park()`：让此方法所在的线程阻塞。可以通过`interrupt()`方法来打断正在阻塞的线程，也可通过`unpark()`方法
+2. `LockSupport.unpark(线程名)`：让指定的线程执行，取消阻塞
+
+
+
+```java
+@Slf4j
+public class Test5 {
+    public static void main(String[] args) throws InterruptedException {
+        test3();
+    }
+
+    private static void test3() throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            log.info("park...");
+            LockSupport.park();
+            log.info("unpark...");
+            log.info("打断状态：{}", Thread.currentThread().isInterrupted());
+
+            LockSupport.park();
+            log.info("unpark...");
+        }, "t1");
+        t1.start();
+
+        // 主线程睡眠 1s 后，打断正在 park 的线程
+        sleep(1);
+        t1.interrupt();
+    }
+}
+```
+
+```
+22:27:34.498 [t1] INFO com.thread.concurrent1.Test5 -- park...
+22:27:34.503 [t1] INFO com.thread.concurrent1.Test5 -- unpark...
+22:27:34.504 [t1] INFO com.thread.concurrent1.Test5 -- 打断状态：true
+22:27:34.507 [t1] INFO com.thread.concurrent1.Test5 -- unpark...
+```
+
+
+### 主线程与守护线程
+
+默认情况下，Java 进程需要等待所有线程都运行结束，才会结束
+
+有一种特殊的线程叫做**守护线程**，**只要其它非守护线程运行结束了，即使守护线程的代码没有执行完，也会强制结束**
+
+>`setDaemon(Boolean)`：设置为守护线程。默认为 false，非守护线程
+
+演示守护线程强制结束
+```java
+@Slf4j
+public class Test6 {
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            while (true) {
+                if (Thread.currentThread().isInterrupted()) {
+                    log.info("t1停止");
+                    break;
+                }
+            }
+        }, "t1");
+        t1.setDaemon(true);
+        t1.start();
+
+        Thread.sleep(2000);
+
+        log.info("主线程结束");
+    }
+}
+```
+```
+22:43:42.720 [main] INFO com.thread.concurrent1.Test6 -- 主线程结束
+```
+
+
+注意：
+- 垃圾回收器线程就是一种就常见的守护线程
+- Tomcat 中的 Acceptor（接收请求）和 Poller（分发请求）线程都是守护线程，所以 `Tomcat` 接收到 `shutdown` 命令后，不会等待它们处理完当前请求，会让它们强制结束
+
+
+### 线程状态
+
+线程状态从不同的维度来描述有不同的状态。
+- 从 操作系统 层面来描述，有五种线程状态。
+- 从 JAVA API 层面来描述，有六钟线程状态。
+
+#### 五种状态 —— 操作系统层面
+
+这是从 `操作系统` 层面来描述的
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page28_image.png)
+
+- 【初始状态】仅是在语言层面创建了线程对象，还未与操作系统线程关联 
+- 【可运行状态】（也称为：就绪状态）指该线程已经被创建（与操作系统线程关联），可以由 CPU 调度执行 
+- 【运行状态】指获取了 CPU 时间片运行中的状态 
+  - 当 CPU 时间片用完，会从【运行状态】转换至【可运行状态】，会导致线程的上下文切换 
+- 【阻塞状态】 
+  - 如果调用了阻塞 API，如 BIO 读写文件，这时该线程实际不会用到 CPU，会导致线程上下文切换，进入【阻塞状态】 
+  - 等 BIO 操作完毕，会由操作系统唤醒阻塞的线程，转换至【可运行状态】 
+  - 与【可运行状态】的区别是，对【阻塞状态】的线程来说只要它们一直不唤醒，调度器就一直不会考虑调度它们。调度器只会调度【可运行状态】的线程，给他们分配时间片
+- 【终止状态】表示线程已经执行完毕，生命周期已经结束，不会再转换为其它状态
+
+#### 六种状态 —— JAVA API 层面
+
+这是从 Java API 层面来描述的
+
+根据`Thread.State`枚举，分为六种状态
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page29_image.png)
+
+
+- `NEW`：线程刚被创建，但是还没有调用`start()`方法 
+- `RUNNABLE`： 当调用了`start()`方法之后，注意，Java API 层面的RUNNABLE状态涵盖了 操作系统 层面的【可运行状态】、【运行状态】和【阻塞状态】（由于 BIO 导致的线程阻塞，在 Java 里无法区分，仍然认为是可运行） 
+- `BLOCKED` ，`WAITING`，`TIMED_WAITING`：都是 Java API 层面对【阻塞状态】的细分，后面会在状态转换一节详述
+- `TERMINATED`：当线程代码运行结束，表示线程已经执行完毕
+
+
+:::warning
+Java中的RUNNABLE，即有可能分到了时间片，也可能没有分到时间片，也有可能陷入了操作系统的io阻塞，这三种状态在Java中都叫`RUNNABLE`
+
+比如：在读取文件时，在操作系统层面就变成了 阻塞状态。但是在 Java 层面还是 Runnable 可运行状态
+:::
+
+```java
+@Slf4j(topic = "c.TestState")
+public class TestState {
+    public static void main(String[] args) {
+        Thread t1 = new Thread(() -> {
+            log.debug("running...");
+        }, "t1");
+
+
+        Thread t2 = new Thread(() -> {
+            while (true) {
+
+            }
+        }, "t2");
+        t2.start();
+
+
+        Thread t3 = new Thread(() -> {
+            log.debug("running...");
+        }, "t3");
+        t3.start();
+
+
+        Thread t4 = new Thread(() -> {
+            synchronized (TestState.class) {
+                try {
+                    Thread.sleep(1000000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "t4");
+        t4.start();
+
+
+        Thread t5 = new Thread(() -> {
+            try {
+                t2.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }, "t5");
+        t5.start();
+
+
+        Thread t6 = new Thread(() -> {
+            synchronized (TestState.class) {
+                try {
+                    Thread.sleep(1000000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "t6");
+        t6.start();
+
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        log.debug("t1 state {}", t1.getState());  // NEW 新建状态
+        log.debug("t2 state {}", t2.getState());  // RUNNABLE 可运行状态
+        log.debug("t3 state {}", t3.getState());  // TERMINATED 终止状态
+        log.debug("t4 state {}", t4.getState());  // TIME_WAITING 超时等待状态
+        log.debug("t5 state {}", t5.getState());  // WAITING 等待状态
+        log.debug("t6 state {}", t6.getState());  // BLOCKED 阻塞状态。需要等待锁的释放
+    }
+}
+```
+```
+23:12:49.760 [t3] INFO com.thread.concurrent1.Test7 -- running...
+23:12:50.261 [main] INFO com.thread.concurrent1.Test7 -- t1 state NEW
+23:12:50.263 [main] INFO com.thread.concurrent1.Test7 -- t2 state RUNNABLE
+23:12:50.263 [main] INFO com.thread.concurrent1.Test7 -- t3 state TERMINATED
+23:12:50.263 [main] INFO com.thread.concurrent1.Test7 -- t4 state TIMED_WAITING
+23:12:50.263 [main] INFO com.thread.concurrent1.Test7 -- t5 state WAITING
+23:12:50.263 [main] INFO com.thread.concurrent1.Test7 -- t6 state BLOCKED
+```
+
+
+#### 相关面试题🤏🏻
+
+**说说线程的生命状态和状态？**
+
+Java 线程在运行的生命周期中的指定时刻只可能处于下面 6 种不同状态的其中一个状态：
+- NEW: 初始状态，线程被创建出来但没有被调用start() 。
+- RUNNABLE: 运行状态，线程被调用了start()等待运行的状态。
+- BLOCKED：阻塞状态，需要等待锁释放。
+- WAITING：等待状态，表示该线程需要等待其他线程做出一些特定动作（通知或中断）。比如join()方法。
+- TIME_WAITING：超时等待状态，可以在指定的时间后自行返回而不是像 WAITING 那样一直等待。比如sleep
+- TERMINATED：终止状态，表示该线程已经运行完毕。
+线程在生命周期中并不是固定处于某一个状态而是随着代码的执行在不同状态之间切换。

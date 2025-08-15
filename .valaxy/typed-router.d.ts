@@ -34,6 +34,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/elastic-search': RouteRecordInfo<'/posts/elastic-search', '/posts/elastic-search', Record<never, never>, Record<never, never>>,
     '/posts/fragment-a': RouteRecordInfo<'/posts/fragment-a', '/posts/fragment-a', Record<never, never>, Record<never, never>>,
     '/posts/java-concurrency': RouteRecordInfo<'/posts/java-concurrency', '/posts/java-concurrency', Record<never, never>, Record<never, never>>,
+    '/posts/java-monitor': RouteRecordInfo<'/posts/java-monitor', '/posts/java-monitor', Record<never, never>, Record<never, never>>,
     '/posts/java-threadPool': RouteRecordInfo<'/posts/java-threadPool', '/posts/java-threadPool', Record<never, never>, Record<never, never>>,
     '/posts/javase-mianshi': RouteRecordInfo<'/posts/javase-mianshi', '/posts/javase-mianshi', Record<never, never>, Record<never, never>>,
     '/posts/mysql-aa': RouteRecordInfo<'/posts/mysql-aa', '/posts/mysql-aa', Record<never, never>, Record<never, never>>,

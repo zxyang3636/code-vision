@@ -69,7 +69,7 @@ public class Test17 {
 
 ### 问题分析
 
-以上的结果可能是正数、负数、零。为什么呢？因为 Java 中对静态变量的自增，自减并不是原子操作，要彻底理解，必须从字节码来进行分析 
+以上的结果可能是正数、负数、零。为什么呢？因为 Java 中对静态变量的自增，自减并不是原子操作，要彻底理解，必须从字节码来进行分析
 
 例如对于i++ 而言（i 为静态变量），实际会产生如下的四条 JVM 字节码指令：
 
@@ -126,17 +126,17 @@ static int counter = 0;
 static void increment()
 // 临界区
 {
-    counter++; 
+    counter++;
 }
 
 static void decrement()
 // 临界区
 {
-    counter--; 
+    counter--;
 }
 ```
 
-### 竞态条件 Race Condition 
+### 竞态条件 Race Condition
 
 多个线程在临界区内执行，由于代码的**执行序列不同**而导致结果无法预测，称之为发生了**竞态条件**
 
@@ -149,7 +149,7 @@ static void decrement()
 - 非阻塞式的解决方案: `原子变量`
 
 
-`synchronized`，即俗称的*对象锁*。它采用互斥的方式让同一时刻至多只有一个线程能持有【对象锁】，其它线程再想获取这个【对象锁】时就会阻塞住，进入 `BLOCKED` 状态。这样就能保证拥有锁的线程可以安全的执行临界区内的代码，不用担心线程上下文切换	
+`synchronized`，即俗称的*对象锁*。它采用互斥的方式让同一时刻至多只有一个线程能持有【对象锁】，其它线程再想获取这个【对象锁】时就会阻塞住，进入 `BLOCKED` 状态。这样就能保证拥有锁的线程可以安全的执行临界区内的代码，不用担心线程上下文切换
 
 :::warning
 虽然 java 中互斥和同步都可以采用 `synchronized` 关键字来完成, 但它们还是有区别的:
@@ -207,11 +207,11 @@ public class Test8 {
 
 ### synchronized-理解
 
-你可以做这样的类比： 
-- synchronized(对象)中的对象，可以想象为一个房间（room），有唯一入口（门）房间只能一次进入一人进行计算，线程 t1，t2 想象成两个人 
-- 当线程 t1 执行到synchronized(room)时就好比 t1 进入了这个房间，并锁住了门拿走了钥匙，在门内执行count++代码 
-- 这时候如果 t2 也运行到了synchronized(room)时，它发现门被锁住了，只能在门外等待，发生了上下文切换，阻塞住了 
-- 这中间即使 t1 的 cpu 时间片不幸用完，被踢出了门外（不要错误理解为锁住了对象就能一直执行下去哦），这时门还是锁住的，t1 仍拿着钥匙，t2 线程还在阻塞状态进不来，只有下次轮到 t1 自己再次获得时间片时才能开门进入 
+你可以做这样的类比：
+- synchronized(对象)中的对象，可以想象为一个房间（room），有唯一入口（门）房间只能一次进入一人进行计算，线程 t1，t2 想象成两个人
+- 当线程 t1 执行到synchronized(room)时就好比 t1 进入了这个房间，并锁住了门拿走了钥匙，在门内执行count++代码
+- 这时候如果 t2 也运行到了synchronized(room)时，它发现门被锁住了，只能在门外等待，发生了上下文切换，阻塞住了
+- 这中间即使 t1 的 cpu 时间片不幸用完，被踢出了门外（不要错误理解为锁住了对象就能一直执行下去哦），这时门还是锁住的，t1 仍拿着钥匙，t2 线程还在阻塞状态进不来，只有下次轮到 t1 自己再次获得时间片时才能开门进入
 - 当 t1 执行完synchronized{}块内的代码，这时候才会从 obj 房间出来并解开门上的锁，唤醒 t2 线程把钥匙给他。t2 线程这时才可以进入 obj 房间，锁住了门拿上钥匙，执行它的count--代码
 
 ![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page40_image.png)
@@ -222,7 +222,7 @@ public class Test8 {
 
 **思考**
 
-synchronized 实际是用对象锁保证了临界区内代码的原子性，临界区内的代码对外是不可分割的，不会被线程切换所打断。 
+synchronized 实际是用对象锁保证了临界区内代码的原子性，临界区内的代码对外是不可分割的，不会被线程切换所打断。
 
 
 为了加深理解，请思考下面的问题：
@@ -343,7 +343,7 @@ synchronized 加在静态方法上
 ```java
 class Test{
     public synchronized static void test() {
-        
+
     }
 }
 
@@ -381,8 +381,56 @@ synchronized(this)
            （互不干扰）                 （互不干扰）
 
 ```
+**synchronized(this)示例：**
 
-示例：
+✅ 安全的情况（同一个对象）
+```java
+class Counter {
+    private int count = 0;
+
+    public void increment() {
+        synchronized(this) {
+            count++;
+        }
+    }
+}
+
+Counter c = new Counter();
+new Thread(c::increment).start();
+new Thread(c::increment).start();
+```
+这里两个线程操作的是同一个对象 c，所以 `count++` 会被同步，不会出现线程安全问题。
+
+---
+
+⚠️ 不安全的情况（多个对象）
+```java
+class Counter {
+    private int count = 0;
+
+    public void increment() {
+        synchronized(this) {
+            count++;
+        }
+    }
+}
+
+Counter c1 = new Counter();
+Counter c2 = new Counter();
+new Thread(c1::increment).start();
+new Thread(c2::increment).start();
+
+```
+这里两个线程用的是不同对象（c1 和 c2），锁对象也不一样。
+所以它们同时执行 `count++`，不会互相阻塞，可能就有线程安全问题。
+
+**总结**
+- `synchronized(this)` 线程安全的前提：所有访问共享资源的线程，必须锁住同一个对象。
+- 如果可能有多个对象实例同时访问共享资源，就应该考虑：
+  - 用 `synchronized(someClass.class)` (类锁，全局唯一 )，
+  - 或者自己定义一个全局锁对象 `private static final object LOCK = new object();`
+
+简单示例：
 ```java
 class Test {
     public void method1() {

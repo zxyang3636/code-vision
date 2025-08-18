@@ -451,3 +451,565 @@ class Test {
 - 两个线程用不同对象调用 method1() → 会互相等待（因为是同一个 Test.class 锁）。
 - 两个线程用不同对象调用 method2() → 不会互相等待（锁的是不同实例）。
 :::
+
+
+#### 相关面试题💡
+
+**构造方法可以用 synchronized 修饰吗？**
+
+构造方法不能使用 `synchronized` 关键字修饰。不过，可以在构造方法内部使用 `synchronized` 代码块。
+
+另外，**构造方法本身是线程安全的**，但如果在构造方法中涉及到共享资源的操作，就需要采取适当的同步措施来保证整个构造过程的线程安全
+
+### synchronized加在方法上-线程八锁
+
+其实就是考察 synchronized 锁住的是哪个对象
+
+情况1：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        new Thread(() -> {
+            n1.a();
+        }).start();
+
+        new Thread(() -> {
+            n1.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public synchronized void a() {
+        log.info("1");
+    }
+
+    public synchronized void b() {
+        log.info("2");
+    }
+}
+```
+>锁住的是同一个 this 对象，有可能先打印 1 再打印 2；也可能先打印 2 再打印 1。  
+
+情况2：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        new Thread(() -> {
+            log.info("begin");
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            log.info("begin");
+            n1.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);     // sleep() 不会让出锁资源，只会让线程进入阻塞状态
+        log.info("1");
+    }
+
+    public synchronized void b() {
+        log.info("2");
+    }
+}
+```
+>结果：
+>
+>第一种情况：线程 1 先获得锁，此时会先睡眠 1s，再打印 1。然后线程 2 再打印 2
+>
+>第二种情况：线程 2 先获得锁，此时会先打印 2。然后线程 1 获得锁，此时会先睡眠 1s，再打印 1
+
+情况3：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        new Thread(() -> {
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            n1.b();
+        }).start();
+
+        new Thread(() -> {
+            n1.c();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);     // sleep() 不会让出锁资源，只会让线程进入阻塞状态
+        log.info("1");
+    }
+
+    public synchronized void b() {
+        log.info("2");
+    }
+
+    public void c() {
+        log.info("3");
+    }
+}
+```
+>结果：
+```
+// 3 1s 12
+// 23 1s 1
+// 32 1s 1
+```
+>第一种情况：先打印3，一秒后打印 1，最后打印 2
+>
+>第二种情况：先打印2、3，然后 1s 后打印 1
+>
+>第三种情况：先打印 3，1s 后打印 1，最后打印 2
+
+情况4：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        Number n2 = new Number();
+        new Thread(() -> {
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            n2.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);     // sleep() 不会让出锁资源，只会让线程进入阻塞状态
+        log.info("1");
+    }
+
+    public synchronized void b() {
+        log.info("2");
+    }
+}
+```
+>结果：
+>
+>锁住的不是同一个对象。所以无论先执行线程 1 还是线程 2。由于线程 1 要 Sleep()，所以时间片会分给线程 2。 会先打印 2，再打印 1
+
+情况5：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        new Thread(() -> {
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            n1.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public static synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);     // sleep() 不会让出锁资源，只会让线程进入阻塞状态
+        log.info("1");
+    }
+
+    public synchronized void b() {
+        log.info("2");
+    }
+}
+```
+>结果
+>
+>线程 1 调用 a 方法时，锁住的是类对象。线程 2 调用 b 方法时，锁住的是 n1 对象。因为锁住的不是同一个对象，所以它们之间不互斥。先运行 2，过 1s 后再运行 1
+
+情况6：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        new Thread(() -> {
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            n1.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public static synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);     // sleep() 不会让出锁资源，只会让线程进入阻塞状态
+        log.info("1");
+    }
+
+    public static synchronized void b() {
+        log.info("2");
+    }
+}
+```
+>结果
+>
+>类对象整个内存中只有一份，所以锁定的是同一个对象。
+>
+>第一种情况：过 1s 后打印 1，再打印 2
+>
+>第二种情况：先打印 2，过 1s 后再打印 1
+
+情况7：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        Number n2 = new Number();
+        new Thread(() -> {
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            n2.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public static synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);     // sleep() 不会让出锁资源，只会让线程进入阻塞状态
+        log.info("1");
+    }
+
+    public synchronized void b() {
+        log.info("2");
+    }
+}
+```
+
+>结果
+>
+>线程 1 锁定的是类对象；线程 2 锁定的是 n2 对象。锁住的不是同一个对象
+>总是先 2 再过 1s 后打印 1
+
+情况8：
+```java
+@Slf4j
+public class Test9 {
+    public static void main(String[] args) {
+        Number n1 = new Number();
+        Number n2 = new Number();
+        new Thread(() -> {
+            try {
+                n1.a();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        new Thread(() -> {
+            n2.b();
+        }).start();
+    }
+}
+
+@Slf4j
+class Number {
+    public static synchronized void a() throws InterruptedException {
+        Thread.sleep(1000);
+        log.info("1");
+    }
+
+    public static synchronized void b() {
+        log.info("2");
+    }
+}
+```
+
+>结果
+>
+>因为是静态方法，锁的是类对象。所以线程 1 和线程 2 锁定的是同一个对象
+>
+>第一种情况：过 1s 后打印 1，再打印 2
+>
+>第二种情况：先打印 2，过 1s 后再打印 1
+
+### 变量的线程安全分析
+
+#### 成员变量和静态变量是否线程安全?
+
+- 如果它们**没有共享**，则线程安全
+- 如果它们**被共享**了，根据它们的状态是否能够改变，又分两种情况
+  - 如果只有读取操作，则线程安全
+  - 如果有读写操作，则这段代码是临界区，需要考虑线程安全
+
+#### 局部变量是否线程安全?
+
+- 局部变量是线程安全的
+- 但局部变量引用的对象则未必
+  - 如果引用的对象没有逃离方法的作用访问，它是线程安全的
+  - 如果引用的对象逃离方法的作用范围，需要考虑线程安全
+
+
+#### 局部变量线程安全分析
+**如果局部变量没有引用对象**
+
+```java
+public static void test1() {
+    int i = 10;
+    i++; 
+}
+```
+每个线程调用 test1() 方法时,局部变量 i 都会在每个线程的栈帧内存中被创建多份，因此不存在共享！
+```java [字节码内容]
+public static void test1();
+    descriptor: ()V
+    flags: ACC_PUBLIC, ACC_STATIC
+    Code:
+        stack=1, locals=1, args_size=0
+        0: bipush            10
+        2: istore_0
+        3: iinc               0, 1
+        6: return
+    LineNumberTable:
+        line 10: 0
+        line 11: 3
+        line 12: 6
+    LocalVariableTable:
+        Start Length Slot Name Signature
+            3      4     0    i   I
+```
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page49_image.png)
+:::warning
+局部变量的 i++操作在底层字节码文件中涉及一步：
+```java
+iinc  // 通过 iinc 指令自增
+```
+
+静态变量的 i++ 操作在底层字节码文件中涉及四步：
+```java
+getstatic i // 获取静态变量i的值
+iconst_1 // 准备常量1
+iadd // 自增
+putstatic i // 将修改后的值存入静态变量i
+```
+:::
+
+
+
+不同线程的虚拟机栈的栈帧的局部变量不共享
+
+---
+
+**如果局部变量引用了对象**
+```java
+@Slf4j
+public class TestThreadSafe {
+    static final int THREAD_NUMBER = 2;
+    static final int LOOP_NUMBER = 200;
+
+    public static void main(String[] args) {
+        ThreadUnsafe test = new ThreadUnsafe();
+        for (int i = 0; i < THREAD_NUMBER; i++) {
+            new Thread(() -> test.method1(LOOP_NUMBER), "Thread" + (i + 1)).start();
+        }
+    }
+}
+
+class ThreadUnsafe {
+    // 成员变量
+    ArrayList<String> list = new ArrayList<>();
+
+    public void method1(int loopNumber) {
+        for (int i = 0; i < loopNumber; i++) {
+            // 临界区，会产生竞态条件
+            method2();
+            method3();
+        }
+    }
+
+    private void method2() {
+        list.add("1");
+    }
+
+    private void method3() {
+        list.remove(0);
+    }
+}
+```
+此时，可能存在线程2 还未 add，线程1 就 remove。报错如下：
+```
+Exception in thread "Thread2" java.lang.IndexOutOfBoundsException: Index 0 out of bounds for length 0
+	at java.base/jdk.internal.util.Preconditions.outOfBounds(Preconditions.java:100)
+	at java.base/jdk.internal.util.Preconditions.outOfBoundsCheckIndex(Preconditions.java:106)
+	at java.base/jdk.internal.util.Preconditions.checkIndex(Preconditions.java:302)
+	at java.base/java.util.Objects.checkIndex(Objects.java:385)
+	at java.base/java.util.ArrayList.remove(ArrayList.java:551)
+	at com.thread.concurrent1.ThreadUnsafe.method3(TestThreadSafe.java:45)
+	at com.thread.concurrent1.ThreadUnsafe.method1(TestThreadSafe.java:36)
+	at com.thread.concurrent1.TestThreadSafe.lambda$main$0(TestThreadSafe.java:23)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+
+```
+
+原因：
+- add 操作不是原子性的，add 方法内部会去更新集合的 size 值。可能 t1 线程将数据加入集合，但是还没更新 size 的时候，时间片就被 t2 线程抢走了。t2 线程执行完 add 后并将 size 值更新成 1。此时时间片又被 t1 线程抢走，size 的值再次被设置为 1。这就导致 remove 的时候会有一个线程报索引越界。
+
+
+分析:
+- 无论哪个线程中的 `method2` 引用的都是同一个对象中的 `list` 成员变量，此时临界区产生了
+- `method3` 与 `method2` 分析相同
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page51_image.png)
+
+
+
+如果将 list 修改为局部变量，并且此局部变量的引用没有暴露给外部：
+
+```java
+/**
+ * 局部变量线程安全
+ */
+class ThreadSafe {
+    public final void method1(int loopNumber) {
+        ArrayList<String> list = new ArrayList<>();
+        for (int i = 0; i < loopNumber; i++) {
+            method2(list);
+            method3(list);
+        }
+    }
+
+    private void method2(List<String> list) {
+        list.add("1");
+    }
+
+    private void method3(List<String> list) {
+        list.remove(0);
+    }
+}
+```
+那么，无论运行多少遍，都不会出现上面的索引越界异常。
+
+分析:
+- `list` 是局部变量,每个线程调用时会创建其不同实例,没有共享
+- 而 `method2` 的参数是从 `method1` 中传递过来的,与 `method1` 中引用同一个对象
+- `method3` 的参数分析与 `method2` 相同
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page52_image.png)
+
+---
+
+如果把 method2 和 method3 的方法修改为 public 会不会出现线程安全问题？ 
+- 情况一：有其它线程调用 method2 和 method3
+- 情况二：在 情况1 的基础上，为 ThreadSafe 类添加子类，子类覆盖 method2 或 method3 方法
+
+```java
+class ThreadSafe {
+    public final void method1(int loopNumber) {
+        List<String> list = new ArrayList<>();
+        for (int i = 0; i < loopNumber; i++) {
+            method2(list);
+            method3(list);
+        }
+    }
+    
+    private void method2(List<String> list) {
+        list.add("1");
+    }
+    
+    private void method3(List<String> list) {
+        list.remove(0);
+    }
+}
+
+class ThreadSafeSubClass extends ThreadSafe{
+    @Override
+    public void method3(List<String> list) {
+        new Thread(() -> {
+            list.remove(0);
+        }).start();
+    }
+}
+```
+>从这个例子可以看出 `private` 或 `final` 提供【安全】的意义所在，请体会开闭原则中的【闭】
+
+- ThreadSafe：线程安全 ✅（因为 list 是局部变量，只有一个线程访问）。
+- ThreadSafeSubClass：线程不安全 ❌（因为 list 被多个线程并发访问，而 ArrayList 不是线程安全的）。
+
+可能出现的问题：
+- `list.add("1")` 还没执行完，新的线程就来 `remove(0)`，可能抛 `IndexOutOfBoundsException`。
+- `ArrayList` 不是线程安全的，如果多个线程同时` add/remove`，可能会导致数据错乱甚至 `ConcurrentModificationException`。
+
+:::warning
+如果在子类中定义的方法和基类中的一个 private 方法签名相同**此时子类的方法不是重写基类方法，而是在子类中定义了一个新的方法。**
+:::
+
+#### 常见线程安全类
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

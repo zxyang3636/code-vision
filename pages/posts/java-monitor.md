@@ -993,23 +993,758 @@ class ThreadSafeSubClass extends ThreadSafe{
 
 #### 常见线程安全类
 
+:::info
+- String 
+- Integer、Boolean、Double 等包装类
+- StringBuffer 
+- Random 
+- Vector 
+- Hashtable 
+- java.util.concurrent 包下的类
+:::
+
+**多个线程调用它们同一个实例的某个方法时，是线程安全的。** 也可以理解为
+- 它们的每个方法都用`synchronized`所修饰，都是原子操作，不会被线程的上下文切换所干扰
+- 但注意它们**多个方法组合在一起就不是原子操作**
+
+```java
+HashTable table = new HashTable();
+
+Thread t1 = new Thread(() -> {
+    table.put("key", "value1");  // 每个方法可以保证方法内的临界区代码是原子性的
+}, "t1");
+t1.start();
+
+Thread t2 = new Thread(() -> {
+    table.put("key", "value2");
+}, "t2");
+t2.start();
+```
+
+##### 线程安全类方法组合使用
+
+分析这段代码是否线程安全:
+```java
+Hashtable table = new Hashtable();
+// 线程1，线程2 执行下面方法
+if( table.get("key") == null) {
+    table.put("key", value);
+}
+```
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-20_21-10-23.png)
+此时会产生数据覆盖问题
+
+结果：
+
+由此可见，哪怕线程安全类中的每个方法都是线程安全的，都能保证原子性。但是它们组合到一起不是线程安全的，不能保证原子性。要想它们的组合也能保证原子性，需要手动在外部加线程安全的保护，加锁。 
+
+##### 不可变类的线程安全性
+
+String、Integer 等都是不可变类，因为其内部的属性都不可以改变，因此它们的方法都是线程安全的。
+
+:::tip
+但 String 有 replace，substring 等方法可以改变值啊，那么这些方法又是如何保证线程安全的呢？
+
+答： String 类内部的replace()、substring()都不是在原先的 String 对象上操作，而是每次修改就新建了一个 String 对象。
+:::
+
+String 的 substring 源码
+```java
+public String substring(int beginIndex) {
+    if (beginIndex < 0) {
+        throw new StringIndexOutOfBoundsException(beginIndex);
+    } else {
+        int subLen = this.length() - beginIndex;
+        if (subLen < 0) {
+            throw new StringIndexOutOfBoundsException(subLen);
+        } else if (beginIndex == 0) {
+            return this;
+        } else {
+            // 核心代码 内部调用了 System.arrayCopy() 来复制字符数组
+            return this.isLatin1() ? StringLatin1.newString(this.value, beginIndex, subLen) : StringUTF16.newString(this.value, beginIndex, subLen);
+        }
+    }
+}
+
+// 由此可见，这些方法底层都是新建了一个 String 对象，并把旧对象上的数据复制到新对象上
+public static String newString(byte[] val, int index, int len) {
+    return new String(Arrays.copyOfRange(val, index, index + len), (byte)0);
+}
+```
+##### 案例分析
+
+例1：
+```java
+public class MyServlet extends HttpServlet {
+    // 是否安全？  HashMap 是线程不安全的
+    Map<String,Object> map = new HashMap<>();
+    // 是否安全？  安全
+    String S1 = "...";
+    // 是否安全？  安全
+    final String S2 = "...";
+    // 是否安全？  不安全，常见线程安全类中没有
+    Date D1 = new Date();
+    // 是否安全？  不安全，final 只能保证 D2 这个成员变量的引用值不能变。
+    //             但是这个日期里面的属性可以发生变化
+    final Date D2 = new Date();
+
+    public void doGet(HttpServletRequest request, HttpServletResponse response) {
+        // 使用上述变量
+    }
+}
+```
+
+
+例2：
+```java
+public class MyServlet extends HttpServlet {
+    // 是否安全？  不安全，UserService 是成员变量，被共享使用
+    private UserService userService = new UserServiceImpl();
+
+    public void doGet(HttpServletRequest request, HttpServletResponse response) {
+        userService.update(...);
+    }
+}
+
+public class UserServiceImpl implements UserService {
+    // 记录调用次数
+    private int count = 0;  // 共享资源
+
+    public void update() {
+        // 临界区
+        count++;
+    }
+}
+```
+
+例3：
+```java
+@Aspect
+@Component
+public class MyAspect {
+    // 是否安全？ 不安全 
+    // Spring 中的 bean 没有特殊说明的话，默认情况下都是单例的
+    // 由于 MyAspect 是单例的，是被共享的；那 start 这个成员变量也是被共享的
+    private long start = 0L;
+
+    @Before("execution(* *(..))")
+    public void before() {
+        start = System.nanoTime();
+    }
+
+    @After("execution(* *(..))")
+    public void after() {
+        long end = System.nanoTime();
+        System.out.println("cost time:" + (end - start));
+    }
+}
+```
+>可以使用环绕通知来解决这个线程安全问题。把这些属性变成环绕通知中的局部变量
+
+例 4：
+```java
+public class MyServlet extends HttpServlet {
+    // 是否安全  虽然 UserService 中有一个 UserDao 的成员变量，但是没有其他的地方可以修改它。
+    //			 所以这个成员变量 UserDao 是不可变的，所以是安全的
+    private UserService userService = new UserServiceImpl();
+
+    public void doGet(HttpServletRequest request, HttpServletResponse response) {
+        userService.update(...);
+    }
+}
+
+public class UserServiceImpl implements UserService {
+    // 是否安全  虽然 UserDao 是成员变量，也会被共享。但内部没有可以更改的属性。所以是安全的
+    private UserDao userDao = new UserDaoImpl();
+
+    public void update() {
+        userDao.update();
+    }
+}
+
+public class UserDaoImpl implements UserDao {
+    public void update() {
+        String sql = "update user set password = ? where username = ?";
+        // 是否安全  因为没有成员变量，Connection 是局部变量。所以是线程安全的
+        try (Connection conn = DriverManager.getConnection("","","")){
+            // ...
+        } catch (Exception e) {
+            // ...
+        }
+    }
+}
+```
+
+例 5：
+
+```java
+public class MyServlet extends HttpServlet {
+    // 是否安全  安全。思路同上
+    private UserService userService = new UserServiceImpl();
+
+    public void doGet(HttpServletRequest request, HttpServletResponse response) {
+        userService.update(...);
+    }
+}
+
+public class UserServiceImpl implements UserService {
+    // 是否安全  安全。思路同上
+    private UserDao userDao = new UserDaoImpl();
+
+    public void update() {
+        userDao.update();
+    }
+}
+
+public class UserDaoImpl implements UserDao {
+    // 是否安全  由于 UserDaoImpl 是被多个线程所共享的，所以 Connection 是被共享的成员变量
+    // 			 所以是线程不安全的
+    private Connection conn = null;
+    public void update() throws SQLException {
+        String sql = "update user set password = ? where username = ?";
+        conn = DriverManager.getConnection("","","");
+        // ...
+        conn.close();
+    }
+}
+```
+这里Connection对象被共享，是说线程a执行到close前，cpu时间片完了。切换线程b，b执行完close后，它时间片也完了。这是切换线程a，它去执行close方法时，会报空指针异常。
+
+例 6：
+```java
+public class MyServlet extends HttpServlet {
+    // 是否安全  安全。思路同上
+    private UserService userService = new UserServiceImpl();
+
+    public void doGet(HttpServletRequest request, HttpServletResponse response) {
+        userService.update(...);
+    }
+}
+
+public class UserServiceImpl implements UserService {
+    public void update() {
+        UserDao userDao = new UserDaoImpl();
+        userDao.update();
+    }
+}
+
+public class UserDaoImpl implements UserDao {
+    // 是否安全  由于 前面的 service 中每次都创建了一个新的 UserDao 对象，所以多个线程操作的
+    //     		 不是同一个对象，是线程安全的	
+    private Connection = null;
+    public void update() throws SQLException {
+        String sql = "update user set password = ? where username = ?";
+        conn = DriverManager.getConnection("","","");
+        // ...
+        conn.close();
+    }
+}
+```
+
+例 7：
+```java
+public abstract class Test {
+
+    public void bar() {
+        // 是否安全  由于是抽象类，局部变量 sdf 可能会传递给抽象方法 foo。
+        // 			 可能子类会进行不恰当的实现。所以是线程不安全的
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        foo(sdf);
+    }
+    
+    public abstract foo(SimpleDateFormat sdf);
+
+    public static void main(String[] args) {
+        new Test().bar();
+    }
+    
+}
+```
+其中 foo 的行为是不确定的，可能导致不安全的发生，被称之为**外星方法**
+```java
+public void foo(SimpleDateFormat sdf) {
+    String dateStr = "1999-10-11 00:00:00";
+    for (int i = 0; i < 20; i++) {
+        new Thread(() -> {
+            try {
+                sdf.parse(dateStr);
+            } catch (ParseException e) {
+                e.printStackTrace();
+            }
+        }).start();
+    }
+}
+```
+:::tip
+实现线程安全有三种方式：
+1. 无共享变量
+2. 共享变量不可变
+3. 同步
+:::
+
+##### 卖票练习
+
+测试下面代码是否存在线程安全问题，并尝试改正
+```java
+@Slf4j(topic = "c.ExerciseSell")
+public class ExerciseSell {
+    public static void main(String[] args) throws InterruptedException {
+        // TODO 模拟多线程场景下买票操作
+        TicketWindow ticket = new TicketWindow(1000);  // 创建一个售票窗口，有 1000 张票
+
+        // 所有线程集合
+        List<Thread> threadList = new ArrayList<>();
+        // 统计卖出的票数
+        List<Integer> amountList = new Vector<>();  // Vector 是线程安全的实现
+        for (int i = 0; i < 4000; i++) {
+            Thread thread = new Thread(() -> {
+                // 买票
+                int amount = ticket.sell(randomAmount());
+                amountList.add(amount);
+            });
+            
+            // threadList只在主线程中被创建和使用,是非共享数据,没有其他线程修改它。
+            // 所以是线程安全的。可以使用 ArrayList 来创建
+            threadList.add(thread);
+            thread.start();
+        }
+
+        // 主线程需要等待所有线程运行结束，再往下执行
+        for (Thread thread : threadList) {
+            thread.join();
+        }
+
+        // 统计卖出的票数和剩余的票数
+        log.debug("余票数量为：{}", ticket.getCount());
+        log.debug("卖出的票数为：{}", amountList.stream().mapToInt(Integer::intValue).sum());
+    }
+
+    // Random 为线程安全
+    static Random random = new Random();
+
+    /**
+     * 随机产生 1~5
+     *
+     * @return 产生的值
+     */
+    public static int randomAmount() {
+        return random.nextInt(5) + 1;
+    }
+}
+
+/**
+ * 售票窗口
+ */
+class TicketWindow {
+    private int count;
+
+    public TicketWindow(int count) {
+        this.count = count;
+    }
+
+    // 获取余票数量
+    public int getCount() {
+        return count;
+    }
+
+    // 售票
+    public int sell(int amount) {
+        if (this.count >= amount) {
+            this.count -= amount;
+            return amount;
+        } else {
+            return 0;
+        }
+    }
+}
+
+```
+
+输出：
+```
+23:28:42.967 c.ExerciseSell [main] - 余票数量为：0
+23:28:42.973 c.ExerciseSell [main] - 卖出的票数为：1005
+```
+可以发现，此时的代码存在线程安全问题。多卖出去了 5 张票。
+
+:::info
+让我们分析下这段代码中的临界区以及共享变量：
+1. ticket 是共享变量，多个线程都会用到。
+2. sell() 方法内部有对 amount 共享变量的读写操作，属于临界区。
+3. amountList 也存在线程安全问题，内部有对数组的操作。但我们不用考虑，因为 Vector 已经加了锁，会对 add 方法做线程安全的保护。
+:::
+所以，要想解决这段代码的线程安全。就需要对临界区加锁    `public synchronized int sell`
+
+
+线程安全的卖票代码:
+```java
+@Slf4j(topic = "c.ExerciseSell")
+public class ExerciseSell {
+    public static void main(String[] args) throws InterruptedException {
+        // TODO 模拟多线程场景下买票操作
+        TicketWindow ticket = new TicketWindow(1000);  // 创建一个售票窗口，有 1000 张票
+
+        // 所有线程集合
+        List<Thread> threadList = new ArrayList<>();
+        // 统计卖出的票数
+        List<Integer> amountList = new Vector<>();  // Vector 是线程安全的集合实现
+        for (int i = 0; i < 4000; i++) {
+            Thread thread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    // 买票
+                    // TODO 1. ticket 是共享变量，多个线程都会用到。
+                    int amount = ticket.sell(randomAmount());
+                    amountList.add(amount);  // TODO 3. amountList 也存在线程安全问题，内部有对数组的操作。但我们不用考虑，因为 Vector 已经加了锁，会对 add 方法做线程安全的保护
+                }
+            });
+            threadList.add(thread);  // threadList只在主线程中被创建和使用,是非共享数据,没有其他线程修改它,所以是线程安全的。可以使用ArrayList来创建
+            thread.start();
+        }
+
+        // 主线程需要等待所有线程运行结束，再往下执行
+        for (Thread thread : threadList) {
+            thread.join();
+        }
+
+        // 统计卖出的票数和剩余的票数
+        log.debug("余票数量为：{}", ticket.getCount());
+        log.debug("卖出的票数为：{}", amountList.stream().mapToInt(Integer::intValue).sum());
+    }
+
+    // Random 为线程安全
+    static Random random = new Random();
+
+    /**
+     * 随机产生 1~5
+     *
+     * @return 产生的值
+     */
+    public static int randomAmount() {
+        return random.nextInt(5) + 1;
+    }
+}
+
+/**
+ * 售票窗口
+ */
+class TicketWindow {
+    private int count;
+
+    public TicketWindow(int count) {
+        this.count = count;
+    }
+
+    // 获取余票数量
+    public int getCount() {
+        return count;
+    }
+
+    // 售票
+    // 2. sell() 方法内部有对 amount 共享变量的读写操作。属于临界区。使用 synchronized 加锁保护
+    public synchronized int sell(int amount) {
+        if (this.count >= amount) {
+            this.count -= amount;
+            return amount;
+        } else {
+            return 0;
+        }
+    }
+}
+
+```
+
+
+##### 转账练习
+
+线程不安全的转账代码
+```java
+@Slf4j(topic = "c.ExerciseTransfer")
+public class ExerciseTransfer {
+    public static void main(String[] args) throws InterruptedException {
+        Account a = new Account(1000);
+        Account b = new Account(1000);
+
+        Thread t1 = new Thread(() -> {
+            for (int i = 0; i < 1000; i++) {
+                a.transfer(b, randomAmount());
+            }
+        }, "t1");
+
+        Thread t2 = new Thread(() -> {
+            for (int i = 0; i < 1000; i++) {
+                b.transfer(a, randomAmount());
+            }
+        }, "t2");
+
+        t1.start();
+        t2.start();
+        // 等待 t1、t2 线程执行完毕
+        t1.join();
+        t2.join();
+
+        // 查看转账 2000 次后的总金额
+        log.debug("total:  {}", (a.getMoney() + b.getMoney()));
+    }
+
+    // Random 为线程安全
+    static Random random = new Random();
+
+    /**
+     * 随机产生 1~100
+     *
+     * @return 产生的值
+     */
+    public static int randomAmount() {
+        return random.nextInt(100) +1;
+    }
+}
+
+class Account {
+    private int money;
+
+    public Account(int money) {
+        this.money = money;
+    }
+
+    public int getMoney() {
+        return money;
+    }
+
+    public void setMoney(int money) {
+        this.money = money;
+    }
+
+    // 转账
+    public void transfer(Account target, int amount) {
+        if (this.money >= amount) {
+            this.setMoney(this.getMoney() - amount);
+            target.setMoney(target.getMoney() + amount);
+        }
+    }
+}
+
+```
+```
+22:11:30.593 c.ExerciseTransfer [main] - total:  4291
+```
+可以发现，此时的代码存在线程安全问题。总金额变多了。
+
+:::info
+让我们分析下这段代码中的临界区以及共享变量：
+1. transfer()方法涉及到共享资源的读写，这段方法为临界区。
+2. 共享变量为account，并且由于是两个对象操作transfer()方法。所以共享变量有两个。分别是对象 a 的account和对象 b 的account。 
+3. 涉及Account类的多个实例对象。所以不能用对象锁（两个线程锁的是不同对象，不起作用），要用类锁。
+:::
+
+所以，要想解决这段代码的线程安全。就需要对临界区加锁    `synchronized (Account.class) {}`
+
+线程安全的转账代码:
+```java
+@Slf4j(topic = "c.ExerciseTransfer")
+public class ExerciseTransfer {
+    public static void main(String[] args) throws InterruptedException {
+        Account a = new Account(1000);
+        Account b = new Account(1000);
+
+        Thread t1 = new Thread(() -> {
+            for (int i = 0; i < 1000; i++) {
+                a.transfer(b, randomAmount());
+            }
+        }, "t1");
+
+        Thread t2 = new Thread(() -> {
+            for (int i = 0; i < 1000; i++) {
+                b.transfer(a, randomAmount());
+            }
+        }, "t2");
+
+        t1.start();
+        t2.start();
+        // 等待 t1、t2 线程执行完毕
+        t1.join();
+        t2.join();
+
+        // 查看转账 2000 次后的总金额
+        log.debug("total:  {}", (a.getMoney() + b.getMoney()));
+    }
+
+    // Random 为线程安全
+    static Random random = new Random();
+
+    /**
+     * 随机产生 1~100
+     *
+     * @return 产生的值
+     */
+    public static int randomAmount() {
+        return random.nextInt(100) +1;
+    }
+}
+
+class Account {
+    private int money;
+
+    public Account(int money) {
+        this.money = money;
+    }
+
+    public int getMoney() {
+        return money;
+    }
+
+    public void setMoney(int money) {
+        this.money = money;
+    }
+
+    // 转账
+    // TODO 涉及到共享资源的读写。a 对象的 money 和 b 对象的 money 是共享变量。此段代码为临界区。
+    public void transfer(Account target, int amount) {
+        // 需要把锁加在共享类上。不能到 this 对象上
+        synchronized (Account.class) {
+            if (this.money >= amount) {
+                this.setMoney(this.getMoney() - amount);
+                target.setMoney(target.getMoney() + amount);
+            }
+        }
+    }
+}
+```
 
 
 
 
+### Monitor
+
+#### Java对象头
+
+通常， 我们创建的对象都由两部分组成：
+1. 对象头
+2. 对象中的成员变量
+
+以 32 位虚拟机为例
+
+**普通对象：**
+```
+|--------------------------------------------------------------|
+|                     Object Header (64 bits)                  |
+|------------------------------------|-------------------------|
+|        Mark Word (32 bits)         |    Klass Word (32 bits) |
+|------------------------------------|-------------------------|
+```
+
+**数组对象：**
+```
+|---------------------------------------------------------------------------------|
+| 	        Object Header (96 bits) 											  |
+|--------------------------------|-----------------------|------------------------|
+| 	  	  Mark Word (32bits)     |   Klass Word (32bits) |  array length (32bits) |
+|--------------------------------|-----------------------|------------------------|
+```
+
+**其中 Mark Word 的结构为：**
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-20_22-34-34.png)
+
+**64 位虚拟机 Mark Word**
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-20_22-35-27.png)
+
+参考资料：https://stackoverflow.com/questions/26357186/what-is-in-java-object-header
+
+
+#### 原理 - Monitor 锁
+
+Monitor被翻译为**监视器**或**管程**
+
+每个 Java 对象都可以关联一个 Monitor 对象，如果使用 synchronized 给对象上锁（重量级）之后，该对象头的 Mark Word 中就被设置指向 Monitor 重量级锁对象的地址
+
+Monitor 结构如下：
+
+> 1. Owner：所有者，Monitor 中只能有一个所有者
+> 2. EntryList：等待队列（阻塞队列），进入此队列的线程会进入 BLOCKED 阻塞状态
+> 3. WaitSet：之前获取过锁，但执行条件不满足，进入 WAITING 状态的线程
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-20_22-49-43.png)
+
+---
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-20_22-55-38.png)
+
+- 刚开始 Monitor 中 Owner（所有者）为空
+- 当 Thread-2 执行 synchronized(obj) 时，就会把 Java 对象 obj 和操作系统对象 Monitor 相关联。（靠 obj 对象头中的 Mark Word 记录 Monitor 对象的指针地址）  因为目前只有 Thread-2 一个线程，所以 Monitor 的 Owner 属性会关联上 Thread-2
+- 如果 Thread-3，Thread-4，Thread-5 也来执行 synchronized(obj)，由于 obj 已经关联了一个 Monitor 锁，这些线程就会检查 Monitor 锁是否有主人。因为此时锁的 Owner 属性已经关联上了 Thread-2，所以这些线程就会进入 EntryList 等待队列。这些线程也会进入 BLOCKED 阻塞状态
+- Thread-2 执行完同步代码块的内容，Owner 就会空出来，然后唤醒 EntryList 中等待的线程来竞争锁，竞争时是非公平的（不一定是先进 EntryList 的线程先成为 Owner，JDK 底层实现决定的）
+- 图中 WaitSet 中的 Thread-0，Thread-1 是之前获得过锁，但条件不满足进入 WAITING 状态的线程，后面讲 wait-notify 时会分析
+
+:::warning
+- synchronized 必须是进入同一个对象的 Monitor 才有上述的效果 
+- 不加 synchronized 的对象不会关联 Monitor，不遵从以上规则
+:::
 
 
 
+#### 原理 - synchronized
+
+```java
+static final Object lock = new Object();
+static int counter = 0;
+
+public static void main(String[] args) {
+    synchronized (lock) {
+        counter++;
+    }
+}
+```
+
+反编译为字节码后，对应的字节码为
+```java
+public static void main(java.lang.String[]);
+	descriptor: ([Ljava/lang/String;)V
+	flags: ACC_PUBLIC, ACC_STATIC
+	Code:
+	 	stack=2, locals=3, args_size=1
+	 	0: getstatic     #2            // <- lock引用 （synchronized开始）      
+		3: dup
+ 		4: astore_1                    // lock引用 -> slot 1      
+		5: monitorenter                // 将 lock对象 MarkWord 置为 Monitor 指针   
+		6: getstatic     #3			   // <- i
+		9: iconst_1                    // 准备常数 1    
+		10: iadd                       // +1     
+		11: putstatic    #3            // -> i  
+		14: aload_1                    // <- lock引用     
+		15: monitorexit                // 将 lock对象 MarkWord 重置, 唤醒 EntryList       
+		16: goto         24
+		19: astore_2                   // e -> slot 2       
+		20: aload_1                    // <- lock引用       
+		21: monitorexit                // 将 lock对象 MarkWord 重置, 唤醒 EntryList       
+		22: aload_2                    // <- slot 2 (e)       
+		23: athrow                     // throw e       
+		24: return
+ Exception table:
+	 from  	  to  target type
+	 	6     16	19    any  
+	   19     22	19	  any
+ LineNumberTable:
+	 line 8: 0
+	 line 9: 6
+	 line 10: 14
+	 line 11: 24
+ LocalVariableTable:
+ 	Start  Length  Slot  Name   Signature
+    	0      25      0  args	 [Ljava/lang/String;
+ StackMapTable: number_of_entries = 2
+ 	frame_type = 255 /* full_frame */
+ 		offset_delta = 19
+ 		locals = [ class "[Ljava/lang/String;", class java/lang/Object ]
+ 		stack = [ class java/lang/Throwable ]
+	frame_type = 250 /* chop */
+ 		offset_delta = 4
+```
+
+:::warning
+ 方法级别的 synchronized 不会在字节码指令中有所体现
+:::
 
 
 
-
-
-
-
-
-
-
-
-
+#### 原理 - synchronized 进阶
 

@@ -1748,3 +1748,309 @@ public static void main(java.lang.String[]);
 
 #### 原理 - synchronized 进阶
 
+##### 轻量级锁
+
+>轻量级锁相比较重量级锁，性能有了一定提升。因为不再需要 Monitor 锁，只是用线程栈中的锁记录对象来充当轻量级锁。但轻量级锁还是有一定缺点，可以使用偏向锁进行进一步优化。
+
+**使用场景：**
+
+如果一个对象有多线程要进行加锁，但加锁的时间是错开的（也就是没有竞争），那么可以使用轻量级锁来优化。 
+
+轻量级锁对使用者是透明的，即语法仍然是synchronized
+>JDK6 之后，使用 synchronized进行加锁时，会优先加轻量级锁。如果有竞争，轻量级锁会升级成重量级锁
+
+
+假设有两个方法同步块，利用同一个对象加锁：
+```java
+static final Object obj = new Object();
+
+public static void method1() {
+    synchronized( obj ) {
+        // 同步块 A
+        method2();
+    }
+}
+
+public static void method2() {
+    synchronized( obj ) {
+        // 同步块 B
+    }
+}
+```
+
+**图示：**
+
+1. 创建锁记录（Lock Record）对象，**每个线程的栈帧都会包含一个锁记录的结构**，内部可以存储锁定对象的Mark Word 
+
+:::info
+锁记录对象对我们来说也和 Monitor 一样是不可见的。不是 Java 层面的，是操作系统层面的。
+
+锁记录对象由两部分组成：
+1. 对象指针（Object reference）：将来锁住的对象的内存地址
+2. 锁记录地址和状态信息：用来记录将来锁住的对象的 Mark Work，方便将来解锁时恢复待解锁对象的对象头数据。会和锁住的对象的 Mark Work 通过 CAS 进行交换
+:::
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_21-46-45.png)
+
+2. 让锁记录中 `Object reference` 指向锁对象，并尝试用 `CAS` 替换 `Object` 的 `Mark Word`，将 `Mark Word` 的值存入锁记录
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_21-51-14.png)
+
+3. 如果 CAS 替换成功，对象头中存储了锁记录地址和状态 00，表示由该线程给对象加锁，这时图示如下
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_21-49-32.png)
+
+4. 如果 CAS 失败，有两种情况
+    - 如果是其它线程已经持有了该 Object 的轻量级锁，这时表明有竞争，进入锁膨胀过程
+    - 如果是自己执行了 `synchronized` 锁重入，那么再添加一条 `Lock Record` 作为重入的计数（图中有两个锁记录对象，计数为 2）
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_21-53-03.png)
+
+5. 当退出 `synchronized` 代码块（解锁时）如果有取值为 `null` 的锁记录，表示有重入，这时重置锁记录，表示重入计数减一
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_21-54-14.png)
+
+6. 当退出 `synchronized` 代码块（解锁时）锁记录的值不为 `NULL`，这时使用 `CAS` 将 `Mark Word` 的值恢复给对象头
+    - 成功，则解锁成功
+    - 失败，说明轻量级锁进行了锁膨胀或已经升级为重量级锁，进入重量级锁解锁流程
+
+
+##### 锁膨胀
+如果在尝试加轻量级锁的过程中，CAS 操作无法成功，这时一种情况就是有其它线程为此对象加上了轻量级锁（产生了竞争），这时需要进行锁膨胀，将轻量级锁升级为重量级锁。
+
+```java
+static Object obj = new Object();
+public static void method1() {
+    synchronized( obj ) {
+        // 同步块
+    }
+}
+```
+
+**图示：**
+
+1. 当 Thread-1 准备对 obj 对象进行轻量级加锁时，此时 Thread-0 已经对该对象加了轻量级锁
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_22-10-16.png)
+
+
+2. 这时 Thread-1 加轻量级锁会失败，进入锁膨胀流程
+    - 即为 `obj` 对象申请 `Monitor` 锁，并让 `obj` 指向重量级锁地址
+    - 然后自己进入 `Monitor` 的 `EntryList` 等待队列，进入 `BLOCKED` 阻塞状态
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_22-11-08.png)
+
+
+3. Thread-0 退出同步块解锁时，使用 `CAS` 将 `Mark Word` 的值恢复给对象头，此时由于轻量级锁进行了锁膨胀，会解锁失败。这时会进入重量级解锁流程，即按照 `Monitor` 地址找到 `Monitor 对象`，设置 `Owner` 为 `null`，唤醒 `EntryList` 等待队列中处于 `BLOCKED` 状态的线程
+
+##### 自旋优化
+
+
+:::info
+自旋：在发生重量级锁竞争的过程中，当前线程先不要进入阻塞，而是进行几次循环。可以避免线程的上下文切换
+
+进入阻塞再恢复,会发生上下文切换,比较耗费性能
+:::
+
+重量级锁竞争的时候，还可以使用自旋（循环尝试获取重量级锁）来进行优化，如果当前线程自旋成功（即此时持锁线程已经退出了同步块，释放了锁），这时当前线程就可以避免阻塞，直接成为 Monitor 重量级锁中新的 Owner。
+
+**自旋重试成功的情况**
+
+线程 1（core 1 上）| 对象 Mark | 线程 2（core 2 上）
+|-|-|-
+|-|10（重量锁）|-
+|访问同步块，获取 monitor|10（重量锁）重量锁指针|-
+|成功（加锁）|10（重量锁）重量锁指针|-
+|执行同步块|10（重量锁）重量锁指针|-
+|执行同步块|10（重量锁）重量锁指针|访问同步块，获取 monitor
+|执行同步块|10（重量锁）重量锁指针|自旋重试
+|执行完毕|10（重量锁）重量锁指针|自旋重试
+|成功（解锁）|01（无锁）|自旋重试
+|-|10（重量锁）重量锁指针|成功（加锁）
+|-|10（重量锁）重量锁指针|执行同步块
+|-|...|...
+
+
+**自旋重试失败的情况**
+
+| 线程 1（core 1 上） | 对象 Mark | 线程 2（core 2 上） |
+|---------------------|-----------|---------------------|
+| -                   | 10（重量锁） | -                   |
+| 访问同步块，获取 monitor | 10（重量锁）重量锁指针 | -                   |
+| 成功（加锁）        | 10（重量锁）重量锁指针 | -                   |
+| 执行同步块          | 10（重量锁）重量锁指针 | -                   |
+| 执行同步块          | 10（重量锁）重量锁指针 | 访问同步块，获取 monitor |
+| 执行同步块          | 10（重量锁）重量锁指针 | 自旋重试            |
+| 执行同步块          | 10（重量锁）重量锁指针 | 自旋重试            |
+| 执行同步块          | 10（重量锁）重量锁指针 | 自旋重试            |
+| 执行同步块          | 10（重量锁）重量锁指针 | 阻塞                |
+| -                   | ...       | ...                 |
+
+:::warning
+- 自旋会占用 CPU 时间，单核 CPU 自旋就是浪费，多核 CPU 自旋才能发挥优势。
+- 在 Java 6 之后自旋锁是自适应的，比如对象刚刚的一次自旋操作成功过，那么认为这次自旋成功的可能性会高，就多自旋几次；反之，就少自旋甚至不自旋，总之，比较智能。
+- Java 7 之后不能手动控制是否开启自旋功能
+:::
+
+##### 偏向锁
+
+:::warning
+从 JDK18 开始，偏向锁已经被彻底废弃！
+:::
+
+轻量级锁在没有竞争时（就自己这个线程），每次重入仍然需要执行 CAS 操作。 会浪费 CPU 的性能。
+Java 6 中引入了偏向锁来做进一步优化：只有第一次使用 CAS 将线程 ID 设置到对象的 Mark Word 头，如果后续再发生锁冲入，之后发现这个线程 ID 是自己的就表示没有竞争，不用重新 CAS。以后只要不发生竞争，这个对象就归该线程所有
+>这里的线程 ID 是操作系统赋予的 ID
+
+例如：
+```java
+static final Object obj = new Object();
+
+public static void m1() {
+    synchronized( obj ) {
+        // 同步块 A
+        m2();
+    }
+}
+
+public static void m2() {
+    synchronized( obj ) {
+        // 同步块 B
+        m3();
+    }
+}
+
+public static void m3() {
+    synchronized( obj ) {
+        // 同步块 C
+    }
+}
+```
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_22-55-57.png)
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-21_22-58-21.png)
+
+
+
+##### 偏向锁-状态
+
+回忆一下对象头格式
+
+| Mark Word (64 bits)                                                                 | State               |
+|-------------------------------------------------------------------------------------|---------------------|
+| `unused:25` \| `hashcode:31` \| `unused:1` \| `age:4` \| `biased_lock:0` \| `01`   | Normal              |
+| `thread:54` \| `epoch:2` \| `unused:1` \| `age:4` \| `biased_lock:1` \| `01`       | Biased              |
+| `ptr_to_lock_record:62` \| `00`                                                    | Lightweight Locked  |
+| `ptr_to_heavyweight_monitor:62` \| `10`                                            | Heavyweight Locked  |
+| `11`                                                                                | Marked for GC       |
+
+一个对象创建时：
+- 如果开启了偏向锁（默认开启），那么对象创建后，MarkWord值为0x05，即最后3位为101，这时它的thread、epoch、age都为0
+- 偏向锁是默认是延迟的，不会在程序启动时立即生效，如果想避免延迟，可以加VM参数 `-XX:BiasedLockingStartupDelay=0` 来 禁用延迟
+- 如果没有开启偏向锁，那么对象创建后，MarkWord 值为0x01即最后3位为001，这时它的hashcode、age都为0，第一次用到hashcode时才会赋值
+
+1. 测试延迟特性
+```java
+@Sl4j
+public class TestBiased {
+    public static void main(String[] args) {
+        Dog dog = new Dog();
+        // toPrintableSimple 扩展了 jol 让它的输出更简洁
+        log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true));  
+
+        Thread.sleep(4000);
+        log.debug(ClassLayout.parseInstance(new Dog()).toPrintableSimple(true)); 
+    }
+}
+
+class Dog {}
+```
+```
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000101 
+```
+>- 此时，第一次打印我们发现 dog 对象的 MarkWord 最后三位是 001 ，不是我们预期的 101 。这是因为：
+>**偏向锁默认是有延迟的，不会在程序启动时立即生效**
+>
+>- 第二次打印因为我们让程序启动后休眠了 4s ，偏向锁在此期间已经生效了，所以会发现此时 dog 对象的 MarkWord 最后三位已经是 101
+
+2. 测试偏向锁
+```java
+@Sl4j
+public class TestBiased {
+    public static void main(String[] args) {
+        // 通过 VM Options 属性设置禁用延迟
+        Dog dog = new Dog();
+        log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true));
+
+        synchronized(dog) {
+            log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true)); 
+        }
+
+        log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true)); 
+    }
+}
+
+class Dog {}
+```
+```
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000101 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00011111 11101011 11010000 00000101 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00011111 11101011 11010000 00000101
+```
+>- 第一次打印只是表示该对象启用了偏向锁。（因为前 54 位线程 ID 全是 0）
+>- 第二次打印因为使用了 `synchronized` 来加锁，所以当前线程执行到此时，会优先给 dog 对象加偏向锁（不会考虑加轻量级锁或者重量级锁）。加锁后打印出来的 MarkWord 前 54 位是关联的操作系统的线程 ID
+>- 第三次打印，在加锁完后，打印出来的 MarkWord 没有变化，这是因为“偏向”。dog 对象一开始被主线程给加了锁，以后这个 dog 对象就从属于这个线程。所以 dog 的 MarkWord 头里始终存储的是主线程 ID。除非有其他线程又用了此 dog 对象才会发生改变（处于偏向锁的对象解锁后，线程 ID 仍存储于对象头也就是偏向此线程）
+
+3. 测试禁用
+
+通过在代码运行时添加 VM 参数：`-XX:-UseBiasedLocking`来禁用偏向锁
+```java
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00100000 00010100 11110011 10001000 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001
+```
+
+>- 第一次打印表示没有开启偏向锁
+>- 第二次打印表示在加锁过程中，加了轻量级锁（00 代表轻量级锁）
+>- 第三次打印表示加锁完成后，又变成了初始状态，此时 MarkWord 里面的线程 ID 也会重置
+
+4. 测试 hashcode
+
+```java
+@Sl4j
+public class TestBiased {
+    public static void main(String[] args) {
+        // 通过 VM Options 属性设置禁用延迟
+        Dog dog = new Dog();
+        dog.hashCode();  // TODO 会禁用该对象的偏向锁
+        log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true));
+
+        synchronized(dog) {
+            log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true)); 
+        }
+
+        log.debug(ClassLayout.parseInstance(dog).toPrintableSimple(true)); 
+    }
+}
+
+class Dog {}
+```
+
+```
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00100000 00010100 11110101 10011000 
+c.TestBiased [main] - 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001
+```
+>- 正常状态对象初始化后是没有 hashcode 的，第一次调用才生成
+>- 调用了 hashCode() 后会撤销该对象的偏向锁
+
+
+**为什么调用 hashCode() 后就会禁用偏向锁？**
+
+因为如果对象是处于偏向锁状态，MarkWord 内部存储完 54 位的操作系统线程 ID，没有足够的位置来存储 hashcode 码（31 位）
+
+当一个可偏向的对象，调用了 hashCode() 方法后，就会撤销当前对象的偏向状态，变成正常状态的对象（MarkWord 后三位变为001）
+
+**为什么使用轻量级锁或重量级锁可以正常使用 hashCode()？**
+
+- 轻量级锁将对象的 `hashcode` 存放在线程栈桢中的锁记录对象中
+- 重量级锁将对象的 `hashcode` 存放在 `Monitor` 对象中，解锁的时候会还原回来
+

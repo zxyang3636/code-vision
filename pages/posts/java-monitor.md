@@ -2537,3 +2537,446 @@ public class TestWaitNotify {
 `wait()`方法会释放对象的锁，进入 WaitSet 等待区，从而让其他线程就机会获取对象的锁。无限制等待，直到`notify()` 为止
 
 
+`wait(long n) `有时限的等待, 到 n 毫秒后结束等待，或是被 notify
+
+- 调用`wait()`后进入`WAITING`状态
+- 调用`wait(timeout)`后，进入`TIMED_WAITING`状态
+
+
+#### wait/notify 正确使用
+
+##### sleep与wait
+
+sleep(long n) 和 wait(long n) 的区别
+1. sleep 是 Thread 方法，而 wait 是 Object 的方法
+2. sleep 不需要强制和 synchronized 配合使用，但 wait 需要 和 synchronized 一起用(synchronized之后对象才有monitor)
+3. sleep 在睡眠的同时，不会释放对象锁的，但 wait 在等待的时候会释放对象锁
+
+
+```java
+@Slf4j
+public class Test10 {
+    static final Object lock = new Object();
+
+    public static void main(String[] args) throws InterruptedException {
+        new Thread(() -> {
+            synchronized (lock) {
+                try {
+//                    Thread.sleep(20000);      // 不会释放锁
+                    lock.wait(20000);   // 会释放锁
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }, "t1").start();
+
+        Thread.sleep(1000);
+        synchronized (lock) {
+            log.info("主线程获得锁了了");
+        }
+    }
+}
+```
+
+
+**Step1**
+
+思考下面的解决方案好不好，为什么？
+
+```
+线程：
+- 小南：想干活，但需要烟。
+- 其它人：不管烟，直接干活。
+- 送烟的：3秒后把 hasCigarette 改成 true。
+```
+
+```java
+static final Object room = new Object();
+static boolean hasCigarette = false;
+static boolean hasTakeout = false;
+```
+
+```java
+new Thread(() -> {
+    synchronized (room) {
+        log.debug("有烟没？[{}]", hasCigarette);
+        if (!hasCigarette) {
+            log.debug("没烟，先歇会！");
+            sleep(2);
+        }
+        log.debug("有烟没？[{}]", hasCigarette);
+        if (hasCigarette) {
+            log.debug("可以开始干活了");
+        }
+    }
+}, "小南").start();
+for (int i = 0; i < 5; i++) {
+    new Thread(() -> {
+        synchronized (room) {
+            log.debug("可以开始干活了");
+        }
+    }, "其它人").start();
+}
+sleep(1);
+new Thread(() -> {
+    // 这里能不能加 synchronized (room)？
+    hasCigarette = true;
+    log.debug("烟到了噢！");
+}, "送烟的").start();
+```
+
+输出
+
+```sh
+20:49:49.883 [小南] c.TestCorrectPosture - 有烟没？[false] 
+20:49:49.887 [小南] c.TestCorrectPosture - 没烟，先歇会！
+20:49:50.882 [送烟的] c.TestCorrectPosture - 烟到了噢！
+20:49:51.887 [小南] c.TestCorrectPosture - 有烟没？[true] 
+20:49:51.887 [小南] c.TestCorrectPosture - 可以开始干活了
+20:49:51.887 [其它人] c.TestCorrectPosture - 可以开始干活了
+20:49:51.887 [其它人] c.TestCorrectPosture - 可以开始干活了
+20:49:51.888 [其它人] c.TestCorrectPosture - 可以开始干活了
+20:49:51.888 [其它人] c.TestCorrectPosture - 可以开始干活了
+20:49:51.888 [其它人] c.TestCorrectPosture - 可以开始干活了
+```
+
+- 其它干活的线程，都要一直阻塞，效率太低 
+- 小南线程必须睡足 2s 后才能醒来，就算烟提前送到，也无法立刻醒来 
+- 不能加，因为加了 synchronized (room) 后，就好比小南在里面反锁了门睡觉，烟根本没法送进门，main 没加 synchronized 就好像 main 线程是翻窗户进来的 
+- 解决方法，使用 wait - notify 机制
+
+
+
+**step2**
+
+思考下面的实现行吗，为什么？
+
+```java
+new Thread(() -> {
+    synchronized (room) {
+        log.info("有烟没？[{}]", hasCigarette);
+        if (!hasCigarette) {
+            log.info("没烟，先歇会！");
+            try {
+                room.wait(2000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        log.info("有烟没？[{}]", hasCigarette);
+        if (hasCigarette) {
+            log.info("可以开始干活了");
+        }
+    }
+}, "小南").start();
+for (int i = 0; i < 5; i++) {
+    new Thread(() -> {
+        synchronized (room) {
+            log.info("可以开始干活了");
+        }
+    }, "其它人").start();
+}
+sleep(1);
+new Thread(() -> {
+    synchronized (room) {
+        hasCigarette = true;
+        log.info("烟到了噢！");
+        room.notify();
+    }
+}, "送烟的").start();
+```
+
+改进点：
+```
+- wait() → 释放锁 + 进入等待队列(waitSet)。
+- notify() → 随机唤醒一个等待中的线程，但不会立刻执行，还要竞争锁。
+- 小南有两种唤醒方式：超时（2s） 或 送烟的 notify()。
+- 其它人不会被小南卡住，因为小南 wait 的时候已经释放锁了。
+```
+
+- 解决了其它干活的线程阻塞的问题 
+- 但如果有其它线程也在等待条件呢？如果有多个线程，那唤醒的如果不是期望唤醒的线程呢？
+
+
+**Step3**
+
+错误唤醒也叫虚假唤醒
+
+```
+- 小南：等烟
+- 小女：等外卖
+- 送外卖的：只送外卖，调用一次 notify()
+```
+
+共享状态：
+```java
+static boolean hasCigarette = false;
+static boolean hasTakeout = false;
+```
+```java
+new Thread(() -> {
+    synchronized (room) {
+        log.debug("有烟没？[{}]", hasCigarette);
+        if (!hasCigarette) {
+            log.debug("没烟，先歇会！");
+            try {
+                room.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        log.debug("有烟没？[{}]", hasCigarette);
+        if (hasCigarette) {
+            log.debug("可以开始干活了");
+        } else {
+            log.debug("没干成活...");
+        }
+    }
+}, "小南").start();
+new Thread(() -> {
+    synchronized (room) {
+        Thread thread = Thread.currentThread();
+        log.debug("外卖送到没？[{}]", hasTakeout);
+        if (!hasTakeout) {
+            log.debug("没外卖，先歇会！");
+            try {
+                room.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        log.debug("外卖送到没？[{}]", hasTakeout);
+        if (hasTakeout) {
+            log.debug("可以开始干活了");
+        } else {
+            log.debug("没干成活...");
+        }
+    }
+}, "小女").start();
+sleep(1);
+new Thread(() -> {
+    synchronized (room) {
+        hasTakeout = true;
+        log.debug("外卖到了噢！");
+        room.notify();
+    }
+}, "送外卖的").start();
+```
+- `notify() `只能唤醒一个等待线程，而唤醒的是谁不可控。
+- notify 不能指定唤醒谁，结果可能「唤错人」，导致逻辑不符合预期。
+输出
+
+```sh
+20:53:12.173 [小南] c.TestCorrectPosture - 有烟没？[false] 
+20:53:12.176 [小南] c.TestCorrectPosture - 没烟，先歇会！
+20:53:12.176 [小女] c.TestCorrectPosture - 外卖送到没？[false] 
+20:53:12.176 [小女] c.TestCorrectPosture - 没外卖，先歇会！
+20:53:13.174 [送外卖的] c.TestCorrectPosture - 外卖到了噢！
+20:53:13.174 [小南] c.TestCorrectPosture - 有烟没？[false] 
+20:53:13.174 [小南] c.TestCorrectPosture - 没干成活... 
+```
+
+- notify 只能随机唤醒一个 WaitSet 中的线程，这时如果有其它线程也在等待，那么就可能唤醒不了正确的线 程，称之为【虚假唤醒】 
+- 解决方法，改为 notifyAll
+
+
+**Step4**
+
+```java
+new Thread(() -> {
+    synchronized (room) {
+        hasTakeout = true;
+        log.debug("外卖到了噢！");
+        room.notifyAll();
+    }
+}, "送外卖的").start();
+```
+
+输出
+
+```sh
+20:55:23.978 [小南] c.TestCorrectPosture - 有烟没？[false] 
+20:55:23.982 [小南] c.TestCorrectPosture - 没烟，先歇会！
+20:55:23.982 [小女] c.TestCorrectPosture - 外卖送到没？[false] 
+20:55:23.982 [小女] c.TestCorrectPosture - 没外卖，先歇会！
+20:55:24.979 [送外卖的] c.TestCorrectPosture - 外卖到了噢！
+20:55:24.979 [小女] c.TestCorrectPosture - 外卖送到没？[true] 
+20:55:24.980 [小女] c.TestCorrectPosture - 可以开始干活了
+20:55:24.980 [小南] c.TestCorrectPosture - 有烟没？[false] 
+20:55:24.980 [小南] c.TestCorrectPosture - 没干成活... 
+```
+
+- 用 `notifyAll()` 仅解决某个线程的唤醒问题，但使用 if + wait 判断仅有一次机会，一旦条件不成立，就没有重新判断的机会了 
+- 解决方法，用 while + wait，当条件不成立，再次 wait
+
+
+**Step5**
+
+
+将 if 改为 while
+
+```java
+if (!hasCigarette) {
+    log.debug("没烟，先歇会！");
+    try {
+        room.wait();
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+改动后
+
+```java
+while (!hasCigarette) {
+    log.debug("没烟，先歇会！");
+    try {
+        room.wait();
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+
+// 其余不变
+```
+
+输出
+
+```sh
+20:58:34.322 [小南] c.TestCorrectPosture - 有烟没？[false] 
+20:58:34.326 [小南] c.TestCorrectPosture - 没烟，先歇会！
+20:58:34.326 [小女] c.TestCorrectPosture - 外卖送到没？[false] 
+20:58:34.326 [小女] c.TestCorrectPosture - 没外卖，先歇会！
+20:58:35.323 [送外卖的] c.TestCorrectPosture - 外卖到了噢！
+20:58:35.324 [小女] c.TestCorrectPosture - 外卖送到没？[true] 
+20:58:35.324 [小女] c.TestCorrectPosture - 可以开始干活了
+20:58:35.324 [小南] c.TestCorrectPosture - 没烟，先歇会！
+```
+
+- if + wait 被唤醒后直接往下走， 判断仅有一次机会，一旦条件不成立，就没有重新判断的机会了 
+- while + wait 被唤醒后重新判断条件，条件不满足就继续等待，直到满足为止。
+
+wait notify使用公式：
+```java
+synchronized(lock) {
+    while(条件不成立) {
+        lock.wait();
+    }
+    // 干活
+}
+//另一个线程
+synchronized(lock) {
+    lock.notifyAll();
+}
+```
+
+##### 设计模式-保护性暂停
+
+**同步模式之保护性暂停**
+
+即 `Guarded Suspension`，用在一个线程等待另一个线程的执行结果 
+
+- 有一个结果需要从一个线程传递到另一个线程，让他们关联同一个 GuardedObject 
+- 如果有结果不断从一个线程到另一个线程那么可以使用消息队列（见生产者/消费者） 
+- JDK 中，join 的实现、Future 的实现，采用的就是此模式 
+- 因为要等待另一方的结果，因此归类到同步模式
+
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-25_23-13-16.png)
+
+
+**保护性暂停实现**
+
+```java
+@Slf4j
+public class Test11 {
+    public static void main(String[] args) {
+        // 线程1等待线程2的下载结果
+        GuardedObject guardedObject = new GuardedObject();
+        new Thread(() -> {
+            // 等待结果
+            log.info("等待结果");
+            Object o = guardedObject.get();
+            log.info("结果：{}", JSON.toJSONString(o));
+        }, "t1").start();
+
+        new Thread(() -> {
+            log.info("执行下载。。");
+            try {
+                guardedObject.complete(Downloder.download());
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }, "t2").start();
+    }
+}
+
+class GuardedObject {
+    /**
+     * 结果
+     */
+    private Object response;
+
+    /**
+     * 获取结果
+     *
+     * @return
+     */
+    public Object get() {
+        synchronized (this) {
+            while (response == null) {
+                // 没有结果
+                try {
+                    this.wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            return response;
+        }
+    }
+
+    /**
+     * 产生结果
+     *
+     * @param response
+     */
+    public void complete(Object response) {
+        synchronized (this) {
+            // 结果给成员变量
+            this.response = response;
+            this.notifyAll();
+        }
+    }
+}
+```
+
+```java
+public class Downloder {
+    public static List<String> download() throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL("https://www.baidu.com/").openConnection();
+        List<String> lines = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines.add(line);
+            }
+        }
+        return lines;
+    }
+}
+```
+```
+23:33:57.971 [t1] INFO com.thread.concurrent1.Test11 -- 等待结果
+23:33:57.971 [t2] INFO com.thread.concurrent1.Test11 -- 执行下载。。
+23:33:59.085 [t1] INFO com.thread.concurrent1.Test11 -- 结果：["<!DOCTYPE html>","<!--STATUS OK--><html> <head><meta http-equiv=content-type content=text/html;charset=utf-8><meta http-equiv=X-UA-Compatible content=IE=Edge><meta content=always name=referrer><link rel=stylesheet
+```
+
+**总结**
+
+如果用join的话，他必须等待线程结束，而用保护性暂停模式，线程2，执行完下载后，可以继续干其他事情
+
+join的话，等待结果的变量必须设置为全局的，不能像现在这样都写为局部的，比如：`Object o = guardedObject.get();`
+
+

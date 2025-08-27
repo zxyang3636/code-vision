@@ -3130,10 +3130,415 @@ join()原理 暂时略。。。
 
 **定义**
 
+- 与前面的保护性暂停中的 GuardObject 不同，不需要产生结果和消费结果的线程一一对应
+- 消费队列可以用来平衡生产和消费的线程资源
+- 生产者仅负责产生结果数据，不关心数据该如何处理，而消费者专心处理结果数据
+- 消息队列是有容量限制的，满时不会再加入数据，空时不会再消耗数据
+- JDK 中各种阻塞队列，采用的就是这种模式
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-27_21-49-42.png)
+
+
+**实现与测试**
+
+```java
+@Slf4j
+public class Test12 {
+    public static void main(String[] args) {
+        MessageQueue messageQueue = new MessageQueue(2);
+
+        for (int i = 0; i < 3; i++) {
+            int id = i;
+            new Thread(() -> {
+                messageQueue.put(new Message(id, "值:" + id));
+            }, "生产者" + i).start();
+        }
+        new Thread(() -> {
+            try {
+                while (true) {
+                    Thread.sleep(1000);
+                    Message message = messageQueue.tack();
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }, "消费者").start();
+
+    }
+}
+
+/**
+ * 消息队列类
+ * 与RabbitMQ不同，该测试是Java中线程间通信
+ * RabbitMQ是进程间通信
+ */
+@Slf4j(topic = "MessageQueue")
+class MessageQueue {
+    // 消息的队列集合
+    private LinkedList<Message> list = new LinkedList<>();
+    // 队列容量
+    private Integer capcity;
+
+    public MessageQueue(Integer capcity) {
+        this.capcity = capcity;
+    }
+
+    // 获取消息
+    public Message tack() {
+        synchronized (list) {
+            while (list.isEmpty()) {
+                try {
+                    log.info("对列为空，消费者线程等待");
+                    list.wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            // 从队列头部获取消息返回
+            Message message = list.removeFirst();
+            log.info("已消费消息：{}", JSON.toJSONString(message));
+            list.notifyAll();
+            return message;
+        }
+    }
+
+    // 存入消息
+    public void put(Message message) {
+        synchronized (list) {
+            // 检查队列是否已满
+            while (list.size() == capcity) {
+                try {
+                    log.info("队列满了，生产者线程等待");
+                    list.wait();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            // 添加从尾部加
+            list.addLast(message);
+            log.info("已生产消息：{}", JSON.toJSONString(message));
+            list.notifyAll();
+        }
+    }
+}
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+final class Message {
+    private Integer id;
+    private Object value;
+}
+```
+```
+22:29:57.899 [生产者2] INFO MessageQueue -- 已生产消息：{"id":2,"value":"值:2"}
+22:29:57.903 [生产者1] INFO MessageQueue -- 已生产消息：{"id":1,"value":"值:1"}
+22:29:57.903 [生产者0] INFO MessageQueue -- 队列满了，生产者线程等待
+22:29:58.663 [消费者] INFO MessageQueue -- 已消费消息：{"id":2,"value":"值:2"}
+22:29:58.664 [生产者0] INFO MessageQueue -- 已生产消息：{"id":0,"value":"值:0"}
+22:29:59.676 [消费者] INFO MessageQueue -- 已消费消息：{"id":1,"value":"值:1"}
+22:30:00.685 [消费者] INFO MessageQueue -- 已消费消息：{"id":0,"value":"值:0"}
+22:30:01.699 [消费者] INFO MessageQueue -- 对列为空，消费者线程等待
+
+```
+
+
+tack()（获取消息）和 put()（存入消息）
+
+
+`capcity = 2`，有 3 个生产者 P0,P1,P2 和 1 个消费者 C：
+- P0、P1 很快把两个消息放入队列（队列满）。
+- P2 调用 put 时发现 list.size()==capcity，进入 wait() 阻塞。
+- Consumer 线程每隔 1s 调 tack()：如果队列非空，消费一个（removeFirst），然后 notifyAll()。
+- notifyAll() 将唤醒 P2，使其能够获得锁并把消息放入队列。如此循环。
+
+
+#### Park & Unpark 
 
 
 
+**基本使用** 
+
+它们是 LockSupport 类中的方法
+```java
+// 暂停当前线程
+LockSupport.park(); 
+// 恢复某个线程的运行
+LockSupport.unpark(暂停线程对象)
+```
+
+**先 park 再 unpark**
+```java
+Thread t1 = new Thread(() -> {
+    log.debug("start...");
+    sleep(1);
+    log.debug("park...");
+    LockSupport.park(); // 此时状态是wait
+    log.debug("resume...");
+},"t1");
+t1.start();
+
+sleep(2);
+log.debug("unpark...");
+LockSupport.unpark(t1);
+```
+```
+18:42:52.585 c.TestParkUnpark [t1] - start... 
+18:42:53.589 c.TestParkUnpark [t1] - park... 
+18:42:54.583 c.TestParkUnpark [main] - unpark... 
+18:42:54.583 c.TestParkUnpark [t1] - resume...
+```
+
+:::tip
+`unpark()`既可以在`park()`之前调用，也可以在`part()`之后调用，都是用来恢复某个线程的运行。
+:::
+
+**先 unpark 再 park**
+
+```java
+Thread t1 = new Thread(() -> {
+    log.debug("start...");
+    sleep(2);
+    log.debug("park...");
+    LockSupport.park();
+    log.debug("resume...");
+}, "t1");
+t1.start();
+
+sleep(1);
+log.debug("unpark...");
+LockSupport.unpark(t1);
+```
+
+```
+18:43:50.765 c.TestParkUnpark [t1] - start... 
+18:43:51.764 c.TestParkUnpark [main] - unpark... 
+18:43:52.769 c.TestParkUnpark [t1] - park... 
+18:43:52.769 c.TestParkUnpark [t1] - resume...
+```
+
+**与 Object 的 wait & notify 相比**
+- wait, notify 和 notifyAll 必须配合 Object Monitor 一起使用, 而 park, unpark 不必
+- park & unpark 是以线程为单位来【阻塞】和【唤醒(指定)】线程, 而 notify 只能随机唤醒一个等待线程, notifyAll 是唤醒所有等待线程, 就不那么【精确】
+- park & unpark 可以先 unpark, 而 wait & notify 不能先 notify
 
 
+##### 原理之 park & unpark
+
+每个线程都有自己的一个(C代码实现的) Parker 对象
+
+由三部分组成 `_counter` ， `_cond(condition条件变量)`  和 `_mutex` (互斥锁)
+
+打个比喻
+- 线程就像一个旅人,Parker就像他随身携带的背包,条件变量就好比背包中的帐篷。_counter 就好比背包中的备用干粮(0为耗尽1为充足)
+- 调用 park 就是要看需不需要停下来歇息
+  - 如果备用干粮耗尽(_counter为0),那么钻进帐篷歇息(等待补充干粮,否则容易半路饿死)
+  - 如果备用干粮充足(_counter为1),那么不需停留,继续前进(兜里有粮,心里不慌)
+- 调用 unpark,就好比令干粮充足(使_counter为1)
+  - 如果这时线程还在帐篷,就唤醒让他继续前进
+  - 如果这时线程还在运行,那么下次他调用 park 时,仅是消耗掉备用干粮,不需停留,继续前进
+    - 因为背包空间有限,多次调用 unpark 仅会补充一份备用干粮,也就是**多次unpark后只会让紧跟着的一次park失效**
+
+
+:::tip
+1. _counter（许可）：
+  - _counter是一个整型变量，用来记录所谓的“许可”。在Parker对象中，默认初始化为0。
+  - 当调用LockSupport.park()时，如果_counter为0，则表示没有许可，线程将被阻塞。
+  - 当调用LockSupport.unpark()时，_counter被设置为1，表示发放了一个许可，如果此时有线程因缺少许可而被阻塞，它将被唤醒并继续执行。
+
+2. _cond（条件变量）：
+  - _cond是POSIX线程库中条件变量的数组，用于线程的等待和唤醒。
+  - 当_counter为0时，线程会通过_cond进入等待状态。如果有其他线程调用unpark()，_cond上等待的线程将被唤醒。
+  - 在Parker对象中，可能包含多个条件变量，用于处理不同类型的等待（如相对时间和绝对时间的等待）。
+
+>POSIX 线程库（POSIX Threads，简称 pthreads）
+>
+>pthread 就是 POSIX 定义的线程编程标准接口。
+>
+>POSIX：Portable Operating System Interface，可移植操作系统接口。
+
+3. _mutex(mutual exclusion)（互斥锁）：
+  - _mutex是POSIX线程库中的互斥锁，用于保护对_counter和_cond的访问，确保线程安全。
+  - 在park()操作中，线程首先尝试获取_mutex，如果成功，则检查_counter。如果_counter为0，则线程将在_cond上等待，并释放_mutex。
+  - 在unpark()操作中，线程首先获取_mutex，然后设置_counter为1，并唤醒在_cond上等待的线程。之后释放_mutex。
+:::
+
+
+**先调用park 再调用unpark**
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-27_23-08-55.png)
+1. 当前线程调用 Unsafe.park() 方法 
+2. 检查 _counter ，本情况为 0，这时，获得 _mutex 互斥锁 
+3. 线程进入 _cond 条件变量阻塞 
+4. 设置 _counter = 0
+
+
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-27_23-36-13.png)
+
+1. 调用 Unsafe.unpark(Thread_0) 方法，设置 _counter 为 1 
+2. 唤醒 _cond 条件变量中的 Thread_0 
+3. Thread_0 恢复运行 
+4. 设置 _counter 为 0
+
+**先调用unpark 再调用park**
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-27_23-49-15.png)
+
+
+1. 调用 Unsafe.unpark(Thread_0) 方法，设置 _counter 为 1 
+2. 当前线程调用 Unsafe.park() 方法 
+3. 检查 _counter ，本情况为 1，这时线程无需阻塞，继续运行 
+4. 设置 _counter 为 0 
+
+
+#### 线程状态转换
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page75_image.png)
+阻塞状态是说，如果调用了操作系统的一些跟阻塞IO相关的API，他就会陷入阻塞，但在Java的层面看不出来，Java总是显示Runnable状态。
+
+**情况1**
+
+NEW --> RUNNABLE
+
+当调用 t.start() 方法时，由 NEW --> RUNNABLE
+
+
+
+**情况2**
+
+RUNNABLE <--> WAITING
+
+t 线程用 synchronized(obj) 获取了对象锁后
+- 调用 obj.wait() 方法时，t 线程从 RUNNABLE --> WAITING
+- 调用 obj.notify()， obj.notifyAll()， t.interrupt() 时
+  - 竞争锁成功，t 线程从 WAITING --> RUNNABLE
+  - 竞争锁失败，t 线程从 WAITING --> BLOCKED
+
+:::info
+idea调试的时候RUNNABLE状态idea显示的是RUNNING，实际上是RUNNABLE状态。
+
+BLOCKED状态idea调试时显示的是Monitor
+:::
+```java
+public class TestWaitNotify {
+    final static Object obj = new Object();
+    
+    public static void main(String[] args) {
+        
+        new Thread(() -> {
+            synchronized (obj) {
+                log.debug("执行....");
+                try {
+                    obj.wait();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                log.debug("其它代码...."); // 断点
+            }
+        },"t1").start();
+        
+        new Thread(() -> {
+            synchronized (obj) {
+                log.debug("执行....");
+                try {
+                    obj.wait();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                log.debug("其它代码...."); // 断点
+            }
+        },"t2").start();
+        
+        sleep(0.5);
+        log.debug("唤醒 obj 上其它线程");
+        synchronized (obj) {
+            obj.notifyAll(); // 唤醒obj上所有等待线程 断点
+        }
+        
+    }
+}
+```
+
+
+
+**情况3**
+
+RUNNABLE <--> WAITING
+
+- **当前线程**调用 `t.join()` 方法时，**当前线程**(调用join方法的线程)从 RUNNABLE --> WAITING
+    - 注意是当前线程在 t 线程对象的监视器上等待
+- **t 线程**运行结束，或调用了**当前线程**的 interrupt() 时，**当前线程**从 WAITING --> RUNNABLE
+
+
+
+**情况4**
+
+RUNNABLE <--> WAITING
+
+- 当前线程调用 LockSupport.park() 方法会让当前线程从 RUNNABLE --> WAITING 
+- 调用 LockSupport.unpark(目标线程) 或调用了线程 的 interrupt() ，会让目标线程从 WAITING -->RUNNABLE 
+
+:::tip
+interrupt 会强制唤醒线程，并设置中断标记。
+
+wait/sleep/join 遇到中断会抛 InterruptedException(isInterrupted() = false)；park 不会抛，但会记录中断状态(isInterrupted() = true)。
+:::
+
+
+**情况5**
+
+RUNNABLE <--> TIMED_WAITING
+
+t线程用 synchronized(obj) 获取了对象锁后
+- 调用 obj.wait(long n) 方法时，t线程从 RUNNABLE --> TIMED_WAITING
+- t线程等待时间超过了n毫秒，或调用 obj.notify() ， obj.notifyAll() ， t.interrupt() 时
+  - 竞争锁成功，t线程从TIMED_WAITING --> RUNNABLE
+  - 竞争锁失败，t线程从TIMED_WAITING --> BLOCKED
+
+
+
+**情况6**
+
+RUNNABLE <--> TIMED_WAITING
+
+- 当前线程调用 t.join(long n) 方法时，当前线程从 RUNNABLE --> TIMED_WAITING
+    - 注意是当前线程在 t 线程对象的监视器上等待
+- 当前线程等待时间超过了 n 毫秒，或 t 线程运行结束，或调用了当前线程的 interrupt() 时，当前线程从 TIMED_WAITING --> RUNNABLE
+
+
+
+**情况7**
+
+RUNNABLE <--> TIMED_WAITING
+
+- 当前线程调用 Thread.sleep(long n) ，当前线程从 RUNNABLE --> TIMED_WAITING 
+- 当前线程等待时间超过了 n 毫秒，当前线程从TIMED_WAITING --> RUNNABLE
+
+
+
+**情况8**
+
+RUNNABLE <--> TIMED_WAITING
+
+- 当前线程调用 LockSupport.parkNanos(long nanos) 或 LockSupport.parkUntil(long millis) 时，当前线 程从 RUNNABLE --> TIMED_WAITING 
+- 调用 LockSupport.unpark(目标线程) 或调用了线程 的 interrupt() ，或是等待超时，会让目标线程从 TIMED_WAITING--> RUNNABLE
+
+
+
+**情况9**
+
+RUNNABLE <--> BLOCKED
+
+- **t 线程**用synchronized(obj) 获取对象锁时如果竞争失败，从RUNNABLE --> BLOCKED 
+- 持 obj 锁线程的同步代码块执行完毕，会唤醒该对象上所有 BLOCKED的线程重新竞争，如果其中 **t 线程**竞争 成功，从 BLOCKED --> RUNNABLE ，其它失败的线程仍然BLOCKED 
+
+
+
+**情况10**
+
+RUNNABLE --> TERMINATED 
+
+当前线程所有代码运行完毕，进入 TERMINATED 
 
 

@@ -3542,3 +3542,665 @@ RUNNABLE --> TERMINATED
 当前线程所有代码运行完毕，进入 TERMINATED 
 
 
+### 多把锁 活跃性
+
+
+#### 多把锁
+多把不相干的锁 
+
+**场景：**
+>一间大屋子有两个功能：睡觉、学习，互不相干。 
+>
+>现在小南要学习，小女要睡觉，但如果只用一间屋子（一个对象锁）的话，那么并发度很低 
+
+例如
+```java
+class BigRoom {
+    
+    public void sleep() {
+        synchronized (this) {
+            log.debug("sleeping 2 小时");
+            Sleeper.sleep(2);
+        }
+    }
+    
+    public void study() {
+        synchronized (this) {
+            log.debug("study 1 小时");
+            Sleeper.sleep(1);
+        }
+    }
+    
+    
+}
+```
+执行
+```java
+BigRoom bigRoom = new BigRoom();
+
+new Thread(() -> {
+    bigRoom.study();
+},"小南").start();
+
+new Thread(() -> {
+    bigRoom.sleep();
+},"小女").start();
+```
+```
+12:13:54.471 [小南] c.BigRoom - study 1 小时
+12:13:55.476 [小女] c.BigRoom - sleeping 2 小时
+```
+我们发现并发度很低
+
+**解决**
+
+解决方法是准备多个房间（多个对象锁）
+```java
+class BigRoom {
+    private final Object studyRoom = new Object();
+    private final Object bedRoom = new Object();
+    
+    public void sleep() {
+        synchronized (bedRoom) {
+            log.debug("sleeping 2 小时");
+            Sleeper.sleep(2);
+        }
+    }
+    
+    public void study() {
+        synchronized (studyRoom) {
+            log.debug("study 1 小时");
+            Sleeper.sleep(1);
+        }
+    }
+    
+}
+```
+执行结果
+```
+12:15:35.069 [小南] c.BigRoom - study 1 小时
+12:15:35.069 [小女] c.BigRoom - sleeping 2 小时
+```
+将锁的粒度细分 
+- 好处，是可以增强并发度 
+- 坏处，如果一个线程需要同时获得多把锁，就容易发生死锁
+
+#### 活跃性
+
+活跃性就是指，线程内的代码本来是有限的，但是因为某种原因，线程代码一直执行不完，这就叫做线程活跃性。
+
+活跃性分别有三种现象：死锁、活锁、饥饿
+
+##### 死锁
+
+ 一个线程需要同时获取多把锁，这时就容易发生死锁 
+
+**示例：**
+
+`t1 线程` 获得 `A对象` 锁，接下来想获取 `B对像` 的锁
+
+`t2 线程` 获得 `B对象` 锁，接下来想获取 `A对象` 的锁 
+
+例：
+```java
+@Slf4j
+public class Test13 {
+    public static void main(String[] args) {
+        Object A = new Object();
+        Object B = new Object();
+
+        Thread t1 = new Thread(() -> {
+            synchronized (A) {
+                log.info("lock A");
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+                synchronized (B) {
+                    log.info("lock B");
+                    log.info("操作...");
+                }
+            }
+        }, "t1");
+
+        Thread t2 = new Thread(() -> {
+            synchronized (B) {
+                log.info("lock B");
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+                synchronized (A) {
+                    log.info("lock A");
+                    log.info("操作...");
+                }
+            }
+        }, "t2");
+
+        t1.start();
+        t2.start();
+    }
+}
+```
+```
+21:39:09.858 [t2] INFO com.thread.concurrent1.Test13 -- lock B
+21:39:09.858 [t1] INFO com.thread.concurrent1.Test13 -- lock A
+```
+程序并没有运行结束，是造成了死锁
+
+<br/>
+
+**定位死锁**
+
+
+检测死锁可以使用 jconsole工具，或者使用 jps 定位进程 id，再用 jstack 定位死锁：
+
+程序运行后(造成死锁)，在idea控制台中
+```
+PS D:\workspace\idea\thread-pool> jps
+528 Launcher
+30420 Jps
+25992
+43144 Test13
+20716 RemoteMavenServer36
+PS D:\workspace\idea\thread-pool> 
+
+```
+找到该进行id，使用jstack命令
+```java
+PS D:\workspace\idea\thread-pool> jstack 43144
+2025-08-28 21:43:19
+Full thread dump Java HotSpot(TM) 64-Bit Server VM (21.0.5+9-LTS-239 mixed mode, sharing):
+
+Threads class SMR info:
+_java_thread_list=0x0000017cf0f6a940, length=14, elements={
+0x0000017cf08b42a0, 0x0000017cf08b4cf0, 0x0000017cf08b5c00, 0x0000017cf08b70f0,
+0x0000017cf08b9f50, 0x0000017cf08beae0, 0x0000017ceb6b8290, 0x0000017cf08cbf90,
+0x0000017cf09992c0, 0x0000017cf0c83a30, 0x0000017cf0b2c110, 0x0000017cf106c5d0,
+0x0000017cf106cc30, 0x0000017cca2f3c10
+}
+
+"Reference Handler" #9 [7632] daemon prio=10 os_prio=2 cpu=0.00ms elapsed=119.14s tid=0x0000017cf08b42a0 nid=7632 waiting on condition  [0x0000001fae5ff000]
+   java.lang.Thread.State: RUNNABLE
+        at java.lang.ref.Reference.waitForReferencePendingList(java.base@21.0.5/Native Method)
+        at java.lang.ref.Reference.processPendingReferences(java.base@21.0.5/Reference.java:246)
+        at java.lang.ref.Reference$ReferenceHandler.run(java.base@21.0.5/Reference.java:208)
+
+"Finalizer" #10 [6188] daemon prio=8 os_prio=1 cpu=0.00ms elapsed=119.14s tid=0x0000017cf08b4cf0 nid=6188 in Object.wait()  [0x0000001fae6fe000]
+   java.lang.Thread.State: WAITING (on object monitor)
+        at java.lang.Object.wait0(java.base@21.0.5/Native Method)
+        - waiting on <0x0000000718e0c2e8> (a java.lang.ref.NativeReferenceQueue$Lock)
+        at java.lang.Object.wait(java.base@21.0.5/Object.java:366)
+        at java.lang.Object.wait(java.base@21.0.5/Object.java:339)
+        at java.lang.ref.NativeReferenceQueue.await(java.base@21.0.5/NativeReferenceQueue.java:48)
+        at java.lang.ref.ReferenceQueue.remove0(java.base@21.0.5/ReferenceQueue.java:158)
+        at java.lang.ref.NativeReferenceQueue.remove(java.base@21.0.5/NativeReferenceQueue.java:89)
+        - locked <0x0000000718e0c2e8> (a java.lang.ref.NativeReferenceQueue$Lock)
+        at java.lang.ref.Finalizer$FinalizerThread.run(java.base@21.0.5/Finalizer.java:173)
+
+"Signal Dispatcher" #11 [38120] daemon prio=9 os_prio=2 cpu=0.00ms elapsed=119.14s tid=0x0000017cf08b5c00 nid=38120 waiting on condition  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+
+"Attach Listener" #12 [42088] daemon prio=5 os_prio=2 cpu=15.62ms elapsed=119.14s tid=0x0000017cf08b70f0 nid=42088 waiting on condition  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+
+"Service Thread" #13 [43176] daemon prio=9 os_prio=0 cpu=0.00ms elapsed=119.14s tid=0x0000017cf08b9f50 nid=43176 runnable  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+
+"Monitor Deflation Thread" #14 [40404] daemon prio=9 os_prio=0 cpu=0.00ms elapsed=119.14s tid=0x0000017cf08beae0 nid=40404 runnable  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+
+"C2 CompilerThread0" #15 [24392] daemon prio=9 os_prio=2 cpu=78.12ms elapsed=119.13s tid=0x0000017ceb6b8290 nid=24392 waiting on condition  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+   No compile task
+
+"C1 CompilerThread0" #23 [51772] daemon prio=9 os_prio=2 cpu=0.00ms elapsed=119.13s tid=0x0000017cf08cbf90 nid=51772 waiting on condition  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+   No compile task
+
+"Common-Cleaner" #27 [18664] daemon prio=8 os_prio=1 cpu=0.00ms elapsed=119.09s tid=0x0000017cf09992c0 nid=18664 waiting on condition  [0x0000001faeefe000]
+   java.lang.Thread.State: TIMED_WAITING (parking)
+        at jdk.internal.misc.Unsafe.park(java.base@21.0.5/Native Method)
+        - parking to wait for  <0x0000000718c0a990> (a java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject)
+        at java.util.concurrent.locks.LockSupport.parkNanos(java.base@21.0.5/LockSupport.java:269)
+        at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.await(java.base@21.0.5/AbstractQueuedSynchronizer.java:1852)
+        at java.lang.ref.ReferenceQueue.await(java.base@21.0.5/ReferenceQueue.java:71)
+        at java.lang.ref.ReferenceQueue.remove0(java.base@21.0.5/ReferenceQueue.java:143)
+        at java.lang.ref.ReferenceQueue.remove(java.base@21.0.5/ReferenceQueue.java:218)
+        at jdk.internal.ref.CleanerImpl.run(java.base@21.0.5/CleanerImpl.java:140)
+        at java.lang.Thread.runWith(java.base@21.0.5/Thread.java:1596)
+        at java.lang.Thread.run(java.base@21.0.5/Thread.java:1583)
+        at jdk.internal.misc.InnocuousThread.run(java.base@21.0.5/InnocuousThread.java:186)
+
+"Monitor Ctrl-Break" #28 [30652] daemon prio=5 os_prio=0 cpu=15.62ms elapsed=118.98s tid=0x0000017cf0c83a30 nid=30652 runnable  [0x0000001faf2fe000]
+   java.lang.Thread.State: RUNNABLE
+        at sun.nio.ch.SocketDispatcher.read0(java.base@21.0.5/Native Method)
+        at sun.nio.ch.SocketDispatcher.read(java.base@21.0.5/SocketDispatcher.java:46)
+        at sun.nio.ch.NioSocketImpl.tryRead(java.base@21.0.5/NioSocketImpl.java:256)
+        at sun.nio.ch.NioSocketImpl.implRead(java.base@21.0.5/NioSocketImpl.java:307)
+        at sun.nio.ch.NioSocketImpl.read(java.base@21.0.5/NioSocketImpl.java:346)
+        at sun.nio.ch.NioSocketImpl$1.read(java.base@21.0.5/NioSocketImpl.java:796)
+        at java.net.Socket$SocketInputStream.read(java.base@21.0.5/Socket.java:1099)
+        at sun.nio.cs.StreamDecoder.readBytes(java.base@21.0.5/StreamDecoder.java:350)
+        at sun.nio.cs.StreamDecoder.implRead(java.base@21.0.5/StreamDecoder.java:393)
+        at sun.nio.cs.StreamDecoder.lockedRead(java.base@21.0.5/StreamDecoder.java:217)
+        at sun.nio.cs.StreamDecoder.read(java.base@21.0.5/StreamDecoder.java:171)
+        at java.io.InputStreamReader.read(java.base@21.0.5/InputStreamReader.java:188)
+        at java.io.BufferedReader.fill(java.base@21.0.5/BufferedReader.java:160)
+        at java.io.BufferedReader.implReadLine(java.base@21.0.5/BufferedReader.java:370)
+        at java.io.BufferedReader.readLine(java.base@21.0.5/BufferedReader.java:347)
+        at java.io.BufferedReader.readLine(java.base@21.0.5/BufferedReader.java:436)
+        at com.intellij.rt.execution.application.AppMainV2$1.run(AppMainV2.java:53)
+
+"Notification Thread" #29 [52816] daemon prio=9 os_prio=0 cpu=0.00ms elapsed=118.98s tid=0x0000017cf0b2c110 nid=52816 runnable  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+
+"t1" #30 [35856] prio=5 os_prio=0 cpu=0.00ms elapsed=118.81s tid=0x0000017cf106c5d0 nid=35856 waiting for monitor entry  [0x0000001faf4ff000]
+   java.lang.Thread.State: BLOCKED (on object monitor)
+        at com.thread.concurrent1.Test13.lambda$main$0(Test13.java:29)
+        - waiting to lock <0x000000071876c538> (a java.lang.Object)
+        - locked <0x000000071876c528> (a java.lang.Object)
+        at com.thread.concurrent1.Test13$$Lambda/0x0000017c8101c768.run(Unknown Source)
+        at java.lang.Thread.runWith(java.base@21.0.5/Thread.java:1596)
+        at java.lang.Thread.run(java.base@21.0.5/Thread.java:1583)
+
+"t2" #31 [38604] prio=5 os_prio=0 cpu=0.00ms elapsed=118.81s tid=0x0000017cf106cc30 nid=38604 waiting for monitor entry  [0x0000001faf5ff000]
+   java.lang.Thread.State: BLOCKED (on object monitor)
+        at com.thread.concurrent1.Test13.lambda$main$1(Test13.java:44)
+        - waiting to lock <0x000000071876c528> (a java.lang.Object)
+        - locked <0x000000071876c538> (a java.lang.Object)
+        at com.thread.concurrent1.Test13$$Lambda/0x0000017c8101c980.run(Unknown Source)
+        at java.lang.Thread.runWith(java.base@21.0.5/Thread.java:1596)
+        at java.lang.Thread.run(java.base@21.0.5/Thread.java:1583)
+
+"DestroyJavaVM" #32 [52200] prio=5 os_prio=0 cpu=46.88ms elapsed=118.81s tid=0x0000017cca2f3c10 nid=52200 waiting on condition  [0x0000000000000000]
+   java.lang.Thread.State: RUNNABLE
+
+"VM Thread" os_prio=2 cpu=0.00ms elapsed=119.15s tid=0x0000017ceb6a4940 nid=40420 runnable
+
+"GC Thread#0" os_prio=2 cpu=0.00ms elapsed=119.17s tid=0x0000017cca5e5290 nid=37688 runnable
+
+"G1 Main Marker" os_prio=2 cpu=0.00ms elapsed=119.17s tid=0x0000017cca5f5800 nid=36744 runnable
+
+"G1 Conc#0" os_prio=2 cpu=0.00ms elapsed=119.17s tid=0x0000017cca5f69b0 nid=18468 runnable
+
+"G1 Refine#0" os_prio=2 cpu=0.00ms elapsed=119.17s tid=0x0000017ceb55a7f0 nid=14228 runnable
+
+"G1 Service" os_prio=2 cpu=0.00ms elapsed=119.17s tid=0x0000017ceb55e030 nid=43776 runnable
+
+"VM Periodic Task Thread" os_prio=2 cpu=0.00ms elapsed=119.16s tid=0x0000017ceb691980 nid=36304 waiting on condition
+
+JNI global refs: 23, weak refs: 0
+
+
+Found one Java-level deadlock:
+=============================
+"t1":
+  waiting to lock monitor 0x0000017cf0f48a60 (object 0x000000071876c538, a java.lang.Object),
+  which is held by "t2"
+
+"t2":
+  waiting to lock monitor 0x0000017cf0f47800 (object 0x000000071876c528, a java.lang.Object),
+  which is held by "t1"
+
+Java stack information for the threads listed above:
+===================================================
+"t1":
+        at com.thread.concurrent1.Test13.lambda$main$0(Test13.java:29)
+        - waiting to lock <0x000000071876c538> (a java.lang.Object)
+        - locked <0x000000071876c528> (a java.lang.Object)
+        at com.thread.concurrent1.Test13$$Lambda/0x0000017c8101c768.run(Unknown Source)
+        at java.lang.Thread.runWith(java.base@21.0.5/Thread.java:1596)
+        at java.lang.Thread.run(java.base@21.0.5/Thread.java:1583)
+"t2":
+        at com.thread.concurrent1.Test13.lambda$main$1(Test13.java:44)
+        - waiting to lock <0x000000071876c528> (a java.lang.Object)
+        - locked <0x000000071876c538> (a java.lang.Object)
+        at com.thread.concurrent1.Test13$$Lambda/0x0000017c8101c980.run(Unknown Source)
+        at java.lang.Thread.runWith(java.base@21.0.5/Thread.java:1596)
+        at java.lang.Thread.run(java.base@21.0.5/Thread.java:1583)
+
+Found 1 deadlock.
+
+
+```
+
+通过查看`Found one Java-level deadlock:`以下字样，我们能够知道第几行发生了死锁，以及哪个线程发生了死锁
+
+**使用jconsole定位死锁**
+
+1. cmd窗口输入`jconsole`命令
+
+2. 进行连接 
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-28_22-10-49.png)
+
+3. 点击线程，点检测死锁
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-28_22-11-43.png)
+
+4. 查看死锁信息
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-28_22-12-57.png)
+
+
+##### 哲学家就餐
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B_page82_image.png)
+
+
+有五位哲学家，围坐在圆桌旁。
+- 他们只做两件事，思考和吃饭，思考一会吃口饭，吃完饭后接着思考。
+- 吃饭时要用两根筷子吃，桌上共有5根筷子，每位哲学家左右手边各有一根筷子。
+- 如果筷子被身边的人拿着，自己就得等待
+
+
+```java
+@Slf4j
+public class TestDeadLock {
+    public static void main(String[] args) {
+        Chopstick c1 = new Chopstick("1");
+        Chopstick c2 = new Chopstick("2");
+        Chopstick c3 = new Chopstick("3");
+        Chopstick c4 = new Chopstick("4");
+        Chopstick c5 = new Chopstick("5");
+
+        new Philosopher("苏格拉底", c1, c2).start();
+        new Philosopher("柏拉图", c2, c3).start();
+        new Philosopher("亚里士多德", c3, c4).start();
+        new Philosopher("赫拉克利特", c4, c5).start();
+        new Philosopher("阿基米德", c5, c1).start();
+    }
+
+}
+
+class Chopstick {
+    String name;
+
+    public Chopstick(String name) {
+        this.name = name;
+    }
+
+    @Override
+    public String toString() {
+        return "筷子{" + name + '}';
+    }
+}
+
+@Slf4j
+class Philosopher extends Thread {
+    Chopstick left;
+    Chopstick right;
+
+    public Philosopher(String name, Chopstick left, Chopstick right) {
+        super(name);
+        this.left = left;
+        this.right = right;
+    }
+
+    private void eat() throws InterruptedException {
+        log.debug("eating...");
+        Thread.sleep(1000);
+    }
+
+    @SneakyThrows
+    @Override
+    public void run() {
+        while (true) {
+            // 获得左手筷子
+            synchronized (left) {
+                // 获得右手筷子
+                synchronized (right) {
+                    // 吃饭
+                    eat();
+                }
+                // 放下右手筷子
+            }
+            // 放下左手筷子
+        }
+    }
+
+}
+```
+```
+12:33:15.575 [苏格拉底] c.Philosopher - eating... 
+12:33:15.575 [亚里士多德] c.Philosopher - eating... 
+12:33:16.580 [阿基米德] c.Philosopher - eating... 
+12:33:17.580 [阿基米德] c.Philosopher - eating... 
+// 卡在这里, 不向下运行
+```
+使用 jconsole 检测死锁，发现
+```java
+-------------------------------------------------------------------------
+名称: 阿基米德
+状态: cn.itcast.Chopstick@1540e19d (筷子1) 上的BLOCKED, 拥有者: 苏格拉底
+总阻止数: 2, 总等待数: 1
+    
+堆栈跟踪:
+cn.itcast.Philosopher.run(TestDinner.java:48)
+ - 已锁定 cn.itcast.Chopstick@6d6f6e28 (筷子5)
+-------------------------------------------------------------------------
+名称: 苏格拉底
+状态: cn.itcast.Chopstick@677327b6 (筷子2) 上的BLOCKED, 拥有者: 柏拉图
+总阻止数: 2, 总等待数: 1
+    
+堆栈跟踪:
+cn.itcast.Philosopher.run(TestDinner.java:48)
+ - 已锁定 cn.itcast.Chopstick@1540e19d (筷子1)
+-------------------------------------------------------------------------
+名称: 柏拉图
+状态: cn.itcast.Chopstick@14ae5a5 (筷子3) 上的BLOCKED, 拥有者: 亚里士多德
+总阻止数: 2, 总等待数: 0
+    
+堆栈跟踪:
+cn.itcast.Philosopher.run(TestDinner.java:48)
+ - 已锁定 cn.itcast.Chopstick@677327b6 (筷子2)
+-------------------------------------------------------------------------
+名称: 亚里士多德
+状态: cn.itcast.Chopstick@7f31245a (筷子4) 上的BLOCKED, 拥有者: 赫拉克利特
+总阻止数: 1, 总等待数: 1
+    
+堆栈跟踪:
+cn.itcast.Philosopher.run(TestDinner.java:48)
+ - 已锁定 cn.itcast.Chopstick@14ae5a5 (筷子3)
+-------------------------------------------------------------------------
+名称: 赫拉克利特
+状态: cn.itcast.Chopstick@6d6f6e28 (筷子5) 上的BLOCKED, 拥有者: 阿基米德
+总阻止数: 2, 总等待数: 0
+    
+堆栈跟踪:
+cn.itcast.Philosopher.run(TestDinner.java:48)
+ - 已锁定 cn.itcast.Chopstick@7f31245a (筷子4)
+```
+这种线程没有按预期结束，执行不下去的情况，归类为【活跃性】问题，除了死锁以外，还有活锁和饥饿者两种情况
+
+
+
+
+##### 活锁
+
+活锁出现在两个线程互相改变对方的结束条件，最后谁也无法结束，例如
+
+```java
+public class TestLiveLock {
+    static volatile int count = 10;
+    static final Object lock = new Object();
+    
+    public static void main(String[] args) {
+        new Thread(() -> {  // 它的目标是把 count 减到 0 然后退出循环。
+            // 期望减到 0 退出循环
+            while (count > 0) {
+                sleep(0.2);
+                count--;
+                log.debug("count: {}", count);
+            }
+        }, "t1").start();
+        
+        new Thread(() -> {  // 它的目标是把 count 加到 20 然后退出循环。
+            // 期望超过 20 退出循环
+            while (count < 20) {
+                sleep(0.2);
+                count++;
+                log.debug("count: {}", count);
+            }
+        }, "t2").start();
+        
+    }
+}
+```
+我们增加些不同的睡眠时间，来解决活锁问题；引入随机等待时间，减少线程间的同步碰撞。
+
+
+- t1 的条件是 count > 0 → 始终为 true。
+- t2 的条件是 count < 20 → 也始终为 true。
+两个线程都无法结束，程序就会一直跑下去。
+
+在这个例子里：
+- t1 想减到 0，但每次减完又被 t2 加回来。
+- t2 想加到 20，但每次加完又被 t1 减回来。
+两个线程都没有停下，但结果就是任务始终完成不了。 这就是 **活锁**。
+
+
+##### 饥饿
+
+始终得不到 CPU 调度执行
+
+很多教程中把饥饿定义为，一个线程由于优先级太低，始终得不到 CPU 调度执行，也不能够结束，饥饿的情况不 
+易演示，讲读写锁时会涉及饥饿问题 
+
+下面我讲一下我遇到的一个线程饥饿的例子，
+先来看看使用顺序加锁的方式解决之前的死锁问题
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-28_23-06-48.png)
+
+顺序加锁的解决方案
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-08-28_23-07-17.png)
+
+
+但顺序加锁容易产生饥饿问题
+
+例如 哲学家就餐时
+
+```{15}java
+@Slf4j
+public class TestDeadLock {
+    public static void main(String[] args) {
+        Chopstick c1 = new Chopstick("1");
+        Chopstick c2 = new Chopstick("2");
+        Chopstick c3 = new Chopstick("3");
+        Chopstick c4 = new Chopstick("4");
+        Chopstick c5 = new Chopstick("5");
+
+        new Philosopher("苏格拉底", c1, c2).start();
+        new Philosopher("柏拉图", c2, c3).start();
+        new Philosopher("亚里士多德", c3, c4).start();
+        new Philosopher("赫拉克利特", c4, c5).start();
+        //new Philosopher("阿基米德", c5, c1).start();
+        new Philosopher("阿基米德", c1, c5).start();
+    }
+
+}
+
+class Chopstick {
+    String name;
+
+    public Chopstick(String name) {
+        this.name = name;
+    }
+
+    @Override
+    public String toString() {
+        return "筷子{" + name + '}';
+    }
+}
+
+@Slf4j
+class Philosopher extends Thread {
+    Chopstick left;
+    Chopstick right;
+
+    public Philosopher(String name, Chopstick left, Chopstick right) {
+        super(name);
+        this.left = left;
+        this.right = right;
+    }
+
+    private void eat() throws InterruptedException {
+        log.info("eating...");
+        Thread.sleep(1000);
+    }
+
+    @SneakyThrows
+    @Override
+    public void run() {
+        while (true) {
+            // 获得左手筷子
+            synchronized (left) {
+                // 获得右手筷子
+                synchronized (right) {
+                    // 吃饭
+                    eat();
+                }
+                // 放下右手筷子
+            }
+            // 放下左手筷子
+        }
+    }
+
+}
+```
+```java
+23:10:38.331 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:38.331 [苏格拉底] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:39.337 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:39.337 [苏格拉底] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:40.351 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:40.351 [苏格拉底] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:41.363 [苏格拉底] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:41.363 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:42.374 [苏格拉底] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:42.374 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:43.384 [苏格拉底] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:43.384 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:44.399 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:45.399 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:46.407 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:47.413 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:48.423 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:49.432 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:50.441 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:51.457 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:52.468 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:53.477 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:54.487 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:55.501 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:56.514 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:57.525 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:58.535 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+23:10:59.543 [赫拉克利特] INFO com.thread.concurrent1.Philosopher -- eating...
+......
+```
+
+总有一个人始终得不到cpu的调度；
+
+
+### ReentrantLock
+相对于 synchronized 它具备如下特点 
+- 可中断 
+- 可以设置超时时间 
+- 可以设置为公平锁(可防止线程饥饿)
+- 支持多个条件变量 
+与 synchronized 一样，都支持可重入 
+
+支持多个条件变量：像synchronized，当条件不满足时，会进入WaitSet进行等待，WaitSet就相当条件变量，条件不满足时，线程就会在这里等待；ReentrantLock是支持多个WaitSet的，不满足条件1的到一个WaitSet中等，不满足条件2的到另一个WaitSet中等；
+
+#### 可重入
+
+
+
+
+
+#### 可打断
+
+
+

@@ -4194,7 +4194,65 @@ class Philosopher extends Thread {
 
 支持多个条件变量：像synchronized，当条件不满足时，会进入WaitSet进行等待，WaitSet就相当条件变量，条件不满足时，线程就会在这里等待；ReentrantLock是支持多个WaitSet的，不满足条件1的到一个WaitSet中等，不满足条件2的到另一个WaitSet中等；
 
+基本语法
+```java
+// 获取锁
+reentrantLock.lock();
+try {
+    // 临界区
+} finally {
+    // 释放锁
+    reentrantLock.unlock();
+}
+```
+
 #### 可重入
+可重入是指同一个线程如果首次获得了这把锁，那么因为它是这把锁的拥有者，因此有权利再次获取这把锁 
+
+如果是不可重入锁，那么第二次获得锁时，自己也会被锁挡住
+```java
+static ReentrantLock lock = new ReentrantLock();
+
+public static void main(String[] args) {
+    method1();
+}
+
+public static void method1() {
+    lock.lock();
+    try {
+        log.debug("execute method1");
+        method2();
+    } finally {
+        lock.unlock();
+    }
+}
+
+public static void method2() {
+    lock.lock();
+    try {
+        log.debug("execute method2");
+        method3();
+    } finally {
+        lock.unlock();
+    }
+}
+
+public static void method3() {
+    lock.lock();
+    try {
+        log.debug("execute method3");
+    } finally {
+        lock.unlock();
+    }
+}
+
+```
+```
+17:59:11.862 [main] c.TestReentrant - execute method1 
+17:59:11.865 [main] c.TestReentrant - execute method2 
+17:59:11.865 [main] c.TestReentrant - execute method3
+```
+
 
 
 
@@ -4202,5 +4260,66 @@ class Philosopher extends Thread {
 
 #### 可打断
 
+使用 `lock.lockInterruptibly()`
+
+这个方法和 `lock.lock()` 的区别在于：
+- `lock.lock()` → 如果获取不到锁，就会一直等，不能被打断。
+- `lock.lockInterruptibly()` → 如果获取不到锁，就会进入等待队列，但是可以被其他线程 `interrupt()` 打断。
+
+```java
+@Slf4j
+public class Test14 {
+    private static ReentrantLock lock = new ReentrantLock();
+
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            try {
+                // 如果没有竞争那么此方法就会获取 Lock 对象锁
+                // 如果有竞争就进入阻塞队列，可以被其它线程用 interruput 方法打断
+                log.info("尝试获取锁");
+                lock.lockInterruptibly();
+            } catch (InterruptedException e) {
+                log.info("没有获取锁，返回");
+                e.printStackTrace();
+                return;
+            }
+            try {
+                log.info("获取到锁");
+            } finally {
+                lock.unlock();
+            }
+        }, "t1");
+
+        lock.lock();    // 主线程先获取锁
+
+        t1.start();
+
+        Thread.sleep(1000); // 一秒后主线程打断t1
+
+        log.info("打断t1线程");
+        t1.interrupt();
+    }
+}
+```
+```java
+00:18:22.742 [t1] INFO com.thread.concurrent1.Test14 -- 尝试获取锁
+00:18:23.746 [main] INFO com.thread.concurrent1.Test14 -- 打断t1线程
+00:18:23.746 [t1] INFO com.thread.concurrent1.Test14 -- 没有获取锁，返回
+java.lang.InterruptedException
+	at java.base/java.util.concurrent.locks.AbstractQueuedSynchronizer.acquireInterruptibly(AbstractQueuedSynchronizer.java:1011)
+	at java.base/java.util.concurrent.locks.ReentrantLock$Sync.lockInterruptibly(ReentrantLock.java:161)
+	at java.base/java.util.concurrent.locks.ReentrantLock.lockInterruptibly(ReentrantLock.java:372)
+	at com.thread.concurrent1.Test14.lambda$main$0(Test14.java:25)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+```
+
+这个例子通过先让 main 拿锁、t1 等待，然后 main 打断 t1，展示了 lockInterruptibly() 的可中断性。
+
+**main 线程休眠 1 秒后打断 t1**
+- 由于 t1 正在等待锁，而且是通过 lockInterruptibly() 在等，所以它能响应中断。
+- 一旦被打断，lock.lockInterruptibly() 会抛出 InterruptedException。
 
 
+:::tip
+打断只是 **抛出中断异常**或者 **设置中断标记**，如何中断处理 线程自行决定，但是如果线程处于阻塞状态，则可以打断线程的阻塞状态，让线程立即退出阻塞状态，并抛出 `InterruptedException` 异常。
+:::

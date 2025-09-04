@@ -4323,3 +4323,311 @@ java.lang.InterruptedException
 :::tip
 打断只是 **抛出中断异常**或者 **设置中断标记**，如何中断处理 线程自行决定，但是如果线程处于阻塞状态，则可以打断线程的阻塞状态，让线程立即退出阻塞状态，并抛出 `InterruptedException` 异常。
 :::
+
+
+#### 锁超时
+
+在 ReentrantLock 里，除了常见的 lock()（阻塞直到获得锁）、lockInterruptibly()（阻塞但可中断），还有一个 非阻塞的获取锁方法：tryLock()。
+```java
+boolean tryLock()
+boolean tryLock(long timeout, TimeUnit unit) throws InterruptedException
+```
+1. `tryLock()`
+```java
+if (lock.tryLock()) {
+    try {
+        // 获取到锁，执行临界区代码
+    } finally {
+        lock.unlock();
+    }
+} else {
+    // 没拿到锁，立即返回 false
+}
+
+```
+- 不会阻塞，如果当前锁空闲，就立刻获取到锁并返回 true；
+- 如果锁被别人占用，就立刻返回 false；
+- 适合“试探性”加锁，不会把线程卡死。
+
+
+2. `tryLock(long timeout, TimeUnit unit)`
+```java
+if (lock.tryLock(2, TimeUnit.SECONDS)) {
+    try {
+        // 获取到锁
+    } finally {
+        lock.unlock();
+    }
+} else {
+    // 在 2 秒内没拿到锁，返回 false
+}
+
+```
+- 最多等待指定时间；
+- 这段时间内如果锁释放了，就拿到锁返回 true；
+- 如果时间到了还没拿到锁，就返回 false；
+
+| 方法                    | 行为                           | 可中断 | 超时 |
+| --------------------- | ---------------------------- | --- | -- |
+| `lock()`              | 一直阻塞直到获得锁                    | ❌   | ❌  |
+| `lockInterruptibly()` | 阻塞直到获得锁，但可被 `interrupt()` 打断 | ✅   | ❌  |
+| `tryLock()`           | 立即尝试获取锁，失败就返回 `false`        | ❌   | ❌  |
+| `tryLock(timeout)`    | 最多等待一段时间，可被打断                | ✅   | ✅  |
+
+
+**示例**
+```java
+@Slf4j
+public class Test15 {
+    private static ReentrantLock lock = new ReentrantLock();
+
+    public static void main(String[] args) {
+        Thread t1 = new Thread(() -> {
+            log.info("尝试获取锁");
+            try {
+                if (!lock.tryLock(1, TimeUnit.MILLISECONDS)) {
+                    log.info("获取不到锁，返回");
+                    return;
+                }
+            } catch (InterruptedException e) {
+                log.info("获取不到锁");
+                throw new RuntimeException(e);
+            }
+            try {
+                log.info("t1获取到锁");
+            } finally {
+                lock.unlock();
+            }
+        }, "t1");
+
+        lock.lock();
+        log.info("main线程获取到锁");
+
+        t1.start();
+    }
+}
+```
+```java
+23:39:47.740 [main] INFO com.thread.concurrent1.Test15 -- main线程获取到锁
+23:39:47.745 [t1] INFO com.thread.concurrent1.Test15 -- 尝试获取锁
+23:39:47.752 [t1] INFO com.thread.concurrent1.Test15 -- 获取不到锁，返回
+```
+- main 线程一开始就拿到了这把 ReentrantLock。
+- 此时锁被占用，其他线程想要再拿这把锁就得等。
+
+-  t1 启动后，调用 `lock.tryLock(1, TimeUnit.MILLISECONDS)`。
+- `tryLock(timeout, unit)` 的含义是：
+    -  尝试获取锁，最多等 1ms，如果 1ms 内没拿到，就返回 false。
+    -  如果等的过程中被 `interrupt()` 打断，会抛 `InterruptedException`。
+- 由于锁在 main 线程手里，而且 main 并没有释放锁，所以 t1 在 1ms 内肯定拿不到锁。
+- 所以 tryLock 返回 false，t1 打印 "获取不到锁，返回"，然后结束。
+
+#### 公平锁
+
+- 公平锁 (Fair Lock) 是指按照线程请求锁的先后顺序来获取锁，即 **先来先得 (FIFO)**。
+- 如果多个线程同时等待一把锁，那么第一个请求锁的线程会先被唤醒并获得锁。
+
+与之对应的是 非公平锁 (Nonfair Lock)：
+- 线程获取锁时，可能插队，不一定遵循先来后到。
+- 非公平锁在性能上通常更好
+
+
+ReentrantLock 构造函数可以指定是否公平：
+```java
+// 默认是非公平锁
+ReentrantLock lock1 = new ReentrantLock();
+
+// 显式指定公平锁
+ReentrantLock lock2 = new ReentrantLock(true);
+
+```
+:::tip
+公平锁能有效避免 线程饥饿 (Starvation)，因为总是先到先得。
+
+非公平锁有可能出现某些线程长时间拿不到锁（但实际 JVM 的调度通常能避免完全饿死）。
+:::
+
+
+#### 条件变量
+
+
+synchronized 中也有条件变量，就是我们讲原理时那个 waitSet 休息室，当条件不满足时进入 waitSet 等待 
+
+ReentrantLock 的条件变量比 synchronized 强大之处在于，它是支持多个条件变量的，这就好比 
+
+- synchronized 是那些不满足条件的线程都在一间休息室等消息 
+- 而 ReentrantLock 支持多间休息室，有专门等烟的休息室、专门等早餐的休息室、唤醒时也是按休息室来唤醒 
+
+:::tip
+- await 前需要获得锁 
+- await 执行后，会释放锁，进入 conditionObject 等待 
+- await 的线程被唤醒（或打断、或超时）去重新竞争 lock 锁 
+- 竞争 lock 锁成功后，从 await 后继续执行 
+:::
+
+**await() 行为：**
+- 调用这个方法的线程放入该 `Condition` 的等待队列并阻塞
+- 会释放锁
+- 被 signal/signalAll 唤醒后，不是立刻运行，而是先回到锁的队列去竞争锁；拿到锁后 await() 才返回，才会继续执行。
+
+**signal() 行为：**
+- 唤醒等待队列中的某个线程
+
+**signalAll() 行为：**
+- 唤醒等待队列中的所有线程
+
+**简单示例**
+```java
+@Slf4j
+public class Test16 {
+    private static ReentrantLock lock = new ReentrantLock();
+
+    public static void main(String[] args) {
+        Condition condition1 = lock.newCondition();
+        Condition condition2 = lock.newCondition();
+
+        lock.lock();
+
+        try {
+            condition1.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
+        condition1.signal();
+
+    }
+}
+```
+
+
+- condition1 和 condition2 是 依附在同一把 lock 上的两个条件队列。
+- 每个条件变量维护着自己的一组等待线程队列。
+- 一个 lock 可以对应多个 Condition，比 synchronized 的 wait/notify 更灵活。
+
+
+调用 await() 会做几件事：
+- 原子释放锁（把刚才的 lock 释放掉）。
+- 把当前线程（这里是 main 线程自己）加入到 condition1 的等待队列里。
+- 当前线程进入 等待状态，直到被别人用 condition1.signal() 或 condition1.signalAll() 唤醒。
+- 被唤醒后，会重新去竞争锁，竞争成功才会从 await() 返回。
+
+这段代码：一旦调用 await()，main 线程就在这里阻塞了，后续代码不会执行，除非有其他线程来唤醒它。当前程序只有一个线程（main），它在 await() 那里已经阻塞住了，不会再往下走。
+
+
+**使用示例**
+
+- 有两类线程：
+    - 一个线程在等 烟。
+    - 一个线程在等 早餐。
+
+- 只有对应的“货物”来了以后，它们才能继续执行。
+
+所以我们需要 两条等待队列：waitCigaretteQueue 和 waitbreakfastQueue 
+
+
+
+```java
+static ReentrantLock lock = new ReentrantLock();
+
+static Condition waitCigaretteQueue = lock.newCondition();
+static Condition waitbreakfastQueue = lock.newCondition();
+
+static volatile boolean hasCigrette = false;
+static volatile boolean hasBreakfast = false;
+
+public static void main(String[] args) {
+    
+    new Thread(() -> {
+        try {
+            lock.lock();
+            while (!hasCigrette) {
+                try {
+                    waitCigaretteQueue.await();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            log.debug("等到了它的烟");
+        } finally {
+            lock.unlock();
+        }
+    }).start();
+    
+    new Thread(() -> {
+        try {
+            lock.lock();
+            while (!hasBreakfast) {
+                try {
+                    waitbreakfastQueue.await();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            log.debug("等到了它的早餐");
+        } finally {
+            lock.unlock();
+        }
+    }).start();
+    
+    sleep(1);
+    sendBreakfast();
+    sleep(1);
+    sendCigarette();
+}
+
+private static void sendCigarette() {
+    lock.lock();
+    try {
+        log.debug("送烟来了");
+        hasCigrette = true;
+        waitCigaretteQueue.signal();
+    } finally {
+        lock.unlock();
+    }
+}
+
+private static void sendBreakfast() {
+    lock.lock();
+    try {
+        log.debug("送早餐来了");
+        hasBreakfast = true;
+        waitbreakfastQueue.signal();
+    } finally {
+        lock.unlock();
+    }
+}
+```
+```
+18:52:27.680 [main] c.TestCondition - 送早餐来了
+18:52:27.682 [Thread-1] c.TestCondition - 等到了它的早餐
+18:52:28.683 [main] c.TestCondition - 送烟来了
+18:52:28.683 [Thread-0] c.TestCondition - 等到了它的烟
+```
+
+- 用 while 而不是 if，是因为被唤醒后要再次检查条件（可能被错误唤醒）。
+- await() 调用时会：
+    1. 释放锁；
+    2. 把当前线程放入对应的条件队列；
+    3. 阻塞等待 signal() 唤醒。
+- 只会唤醒在对应队列上等待的线程，不会影响其他队列的线程。
+
+**和 Object.wait/notify 的对比**
+- `Object.wait/notify` 只有一条等待队列，所有线程都混在一起。
+- `Condition` 可以为同一把锁创建多条队列，分类更细。
+
+
+这段代码用 ReentrantLock + 多个 Condition 模拟了“送烟 & 送早餐”的场景：
+- 等烟的线程只在 waitCigaretteQueue 队列等；
+- 等早餐的线程只在 waitbreakfastQueue 队列等；
+- 主线程控制谁先来（先送早餐，再送烟）。
+这样就能保证线程被精准唤醒，而不会互相干扰。
+
+
+#### 同步模式之顺序控制
+
+[地址](https://www.bilibili.com/video/BV16J411h7Rd?t=11.0&p=128)
+
+---
+
+

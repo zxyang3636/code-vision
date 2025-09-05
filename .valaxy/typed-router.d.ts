@@ -32,6 +32,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/docker-s': RouteRecordInfo<'/posts/docker-s', '/posts/docker-s', Record<never, never>, Record<never, never>>,
     '/posts/efficiency-dev': RouteRecordInfo<'/posts/efficiency-dev', '/posts/efficiency-dev', Record<never, never>, Record<never, never>>,
     '/posts/elastic-search': RouteRecordInfo<'/posts/elastic-search', '/posts/elastic-search', Record<never, never>, Record<never, never>>,
+    '/posts/electron-note': RouteRecordInfo<'/posts/electron-note', '/posts/electron-note', Record<never, never>, Record<never, never>>,
     '/posts/fragment-a': RouteRecordInfo<'/posts/fragment-a', '/posts/fragment-a', Record<never, never>, Record<never, never>>,
     '/posts/java-concurrency': RouteRecordInfo<'/posts/java-concurrency', '/posts/java-concurrency', Record<never, never>, Record<never, never>>,
     '/posts/java-monitor': RouteRecordInfo<'/posts/java-monitor', '/posts/java-monitor', Record<never, never>, Record<never, never>>,

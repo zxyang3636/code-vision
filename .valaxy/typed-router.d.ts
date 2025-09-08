@@ -35,6 +35,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/electron-note': RouteRecordInfo<'/posts/electron-note', '/posts/electron-note', Record<never, never>, Record<never, never>>,
     '/posts/fragment-a': RouteRecordInfo<'/posts/fragment-a', '/posts/fragment-a', Record<never, never>, Record<never, never>>,
     '/posts/java-concurrency': RouteRecordInfo<'/posts/java-concurrency', '/posts/java-concurrency', Record<never, never>, Record<never, never>>,
+    '/posts/java-jmm': RouteRecordInfo<'/posts/java-jmm', '/posts/java-jmm', Record<never, never>, Record<never, never>>,
     '/posts/java-monitor': RouteRecordInfo<'/posts/java-monitor', '/posts/java-monitor', Record<never, never>, Record<never, never>>,
     '/posts/java-threadPool': RouteRecordInfo<'/posts/java-threadPool', '/posts/java-threadPool', Record<never, never>, Record<never, never>>,
     '/posts/javase-mianshi': RouteRecordInfo<'/posts/javase-mianshi', '/posts/javase-mianshi', Record<never, never>, Record<never, never>>,

@@ -332,3 +332,249 @@ int b = a - 5; // 指令2
 ![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-09-09_00-35-30.png)
 
 
+### 指令重排问题
+
+(指令重排序导致的)诡异的结果
+```java
+int num = 0;
+boolean ready = false;
+
+// 线程1 执行此方法
+public void actor1(I_Result r) {
+    if(ready) {
+        r.r1 = num + num;
+    } else {
+        r.r1 = 1;
+    }
+}
+
+// 线程2 执行此方法
+public void actor2(I_Result r) { 
+    //这里可能发生指令重排序
+    num = 2;
+    ready = true; 
+}
+```
+`I_Result` 是一个对象，有一个属性 `r1` 用来保存结果，问，可能的结果有几种？ 
+
+有同学这么分析 
+- 情况1：线程1 先执行，这时 ready = false，所以进入 else 分支结果为 1 
+- 情况2：线程2 先执行 num = 2，但没来得及执行 ready = true，线程1 执行，还是进入 else 分支,结果为1 
+- 情况3：线程2 执行到 ready = true，线程1 执行，这回进入 if 分支，结果为 4（因为 num 已经执行过了） 
+
+但我告诉你，结果还有可能是 0，
+这种情况下是：线程2 执行 `ready = true`，切换到线程1，进入 if 分支，相加为 0，再切回线程2 执行 num = 2 
+:::tip
+因为 actor2 的指令可能被重排序：ready=true 提前执行了，但 num=2 还没写入主内存。
+:::
+
+这种现象叫做指令重排，是 JIT 编译器在运行时的一些优化，这个现象需要通过大量测试才能复现： 
+
+
+
+
+
+
+### 指令重排验证
+
+借助 openjdk 并发压测工具 [jcstress](https://wiki.openjdk.java.net/display/CodeTools/jcstress)
+
+在idea 命令行中执行：
+```java
+mvn archetype:generate -DinteractiveMode=false -DarchetypeGroupId=org.openjdk.jcstress -DarchetypeArtifactId=jcstress-java-test-archetype -DarchetypeVersion=0.5 -DgroupId=cn.itcast -DartifactId=ordering -Dversion=1.0
+```
+
+创建 maven 项目，提供如下测试类
+```java
+@JCStressTest
+@Outcome(id = {"1", "4"}, expect = Expect.ACCEPTABLE, desc = "ok")
+@Outcome(id = "0", expect = Expect.ACCEPTABLE_INTERESTING, desc = "!!!!")
+@State
+public class ConcurrencyTest {
+    
+    int num = 0;
+    boolean ready = false;
+    
+    @Actor
+    public void actor1(I_Result r) {
+        if(ready) {
+            r.r1 = num + num;
+        } else {
+            r.r1 = 1;
+        }
+    }
+    
+    @Actor
+    public void actor2(I_Result r) {
+        num = 2;
+        ready = true;
+    }
+    
+}
+```
+
+打包之后，进入 `target` 目录，找到 `jcstress.jar` 并执行命令：`java -jar target/jcstress.jar`
+
+会看到如下部分的输出：
+```java
+2 matching test results.
+    [OK] cn.itcast.ConcurrencyTest
+    (JVM args: [-XX:-TieredCompilation])
+Observed state    Occurrences             Expectation       Interpretation
+        0            5,404    ACCEPTABLE_INTERESTING      !!!!!
+        1        27,874,016          ACCEPTABLE            ok
+        4        35,147,721          ACCEPTABLE            ok
+
+    [OK] cn.itcast.ConcurrencyTest
+    (JVM args: [])
+Observed state    Occurrences             Expectation       Interpretation
+        0            1,568    ACCEPTABLE_INTERESTING      !!!!!
+        1        17,913,929          ACCEPTABLE            ok
+        4        34,664,864          ACCEPTABLE            ok
+```
+
+执行了34,664,864 次测试，结果是4，执行了17,913,929 次测试，结果是1，也有1568次出现结果为0，确实发生了指令重排序现象。
+
+
+
+
+### 指令重排-禁用
+
+volatile禁用指令重排
+
+**volatile 修饰的变量，可以禁用指令重排**
+
+```java
+@JCStressTest
+@Outcome(id = {"1", "4"}, expect = Expect.ACCEPTABLE, desc = "ok")
+@Outcome(id = "0", expect = Expect.ACCEPTABLE_INTERESTING, desc = "!!!!")
+@State
+public class ConcurrencyTest {
+    
+    int num = 0;
+    volatile boolean ready = false;
+    
+    @Actor
+    public void actor1(I_Result r) {
+        if(ready) {
+            r.r1 = num + num;
+        } else {
+            r.r1 = 1;
+        }
+    }
+    
+    @Actor
+    public void actor2(I_Result r) {
+        num = 2;
+        ready = true;
+    }
+    
+}
+```
+
+执行结果：
+
+```java
+RUN RESULTS:
+-------------------------------------------------------------------------------
+*** INTERESTING tests
+Some interesting behaviors observed. This is for the plain curiosity.
+0 matching test results.
+*** FAILED tests
+Strong asserts were violated. Correct implementations should have no assert failures here.
+0 matching test results.
+*** ERROR tests
+Tests break for some reason, other than failing the assert. Correct implementations should have none.
+0 matching test results.
+```
+:::tip
+
+为什么只给 ready 加 volatile 就够了，而不用给 num 加?
+
+只加在volatile变量上，可以防止之前的代码被重排序，实际上是加了一个写屏障，写屏障就能够保证之前的所有代码不会被排到ready的后面去，所以加一个就够了。
+:::
+
+## volatile 原理
+
+volatile 的底层实现原理是内存屏障，`Memory Barrier（Memory Fence）`
+- 对 volatile 变量的 写指令后会加入写屏障 : 保证在该屏障之前的，对共享变量的改动，都同步到主存当中
+- 对 volatile 变量的 读指令前会加入读屏障 : 在该屏障之后，对共享变量的读取，加载的是主存中最新数据
+
+
+### 保证可见性
+
+**如何保证可见性** 
+
+- 写屏障（sfence）保证在该屏障之前的，对共享变量的改动，都同步到主存当中
+```java
+public void actor2(I_Result r) {
+    num = 2;
+    ready = true; // ready 是 volatile 赋值带写屏障
+    // 写屏障
+}
+```
+
+- 而读屏障（lfence）保证在该屏障之后，对共享变量的读取，加载的是主存中最新数据
+```java
+public void actor1(I_Result r) {
+    // 读屏障
+    // ready 是 volatile 读取值带读屏障
+    if(ready) {
+        r.r1 = num + num;
+    } else {
+        r.r1 = 1;
+    }
+}
+```
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-09-10_00-13-10.png)
+
+
+
+
+### 保证有序性
+
+**如何保证有序性**
+
+- 写屏障会确保指令重排序时，不会将写屏障之前的代码排在写屏障之后
+```java
+public void actor2(I_Result r) {
+    num = 2;
+    ready = true; // ready 是 volatile 赋值带写屏障
+    // 写屏障
+}
+```
+- 读屏障会确保指令重排序时，不会将读屏障之后的代码排在读屏障之前
+```java
+public void actor1(I_Result r) {
+    // 读屏障
+    // ready 是 volatile 读取值带读屏障
+    if(ready) {
+        r.r1 = num + num;
+    } else {
+        r.r1 = 1;
+    }
+}
+```
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-09-10_00-29-12.png)
+
+
+还是那句话，不能解决指令交错：
+- 写屏障仅仅是保证之后的读能够读到最新的结果，但不能保证读跑到它前面去
+- 而有序性的保证也只是保证了本线程内相关代码不被重排序
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-09-10_00-30-26.png)
+
+volatile不能解决原子性问题  即指令的交错执行，只能保证本线程内的相关代码不被重排序
+
+volatile只能适用于一个线程写，多个线程读的场景。
+
+### dcl简介
+
+
+
+
+
+
+
+
+

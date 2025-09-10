@@ -568,11 +568,79 @@ volatile不能解决原子性问题  即指令的交错执行，只能保证本�
 
 volatile只能适用于一个线程写，多个线程读的场景。
 
-### dcl简介
+### double-checked locking 问题 
+
+以著名的 double-checked locking 单例模式为例
+```java
+public final class Singleton {
+    private Singleton() { }
+    private static Singleton INSTANCE = null;
+    
+    public static Singleton getInstance() { 
+        if(INSTANCE == null) { // t2
+            // 首次访问会同步，而之后的使用没有 synchronized
+            synchronized(Singleton.class) {
+                if (INSTANCE == null) { // t1
+                    INSTANCE = new Singleton(); 
+                } 
+            }
+        }
+        return INSTANCE;
+    }
+}
+```
+如果只在 synchronized 中创建实例（每次都锁），虽然线程安全，但性能差。双重检查的目的是：只有第一次创建实例时才加锁，之后直接返回实例。
+
+以上的实现特点是： 
+- 懒惰实例化 
+- 首次使用 getInstance() 才使用 synchronized 加锁，后续使用时无需加锁
+- 有隐含的，但很关键的一点：第一个 if 使用了 INSTANCE 变量，是在同步块之外
+
+这段代码其实是有问题的，完全在synchronized作用域内的 共享变量 才能保证其 原子性,可见性,有序性。这里 `INSTANCE` 并没有完全在 `synchronized` 作用域内,所以对其可能发生重排序;
+
+但在多线程环境下，上面的代码是有问题的，getInstance 方法对应的字节码为:
+```java
+0: getstatic     #2               // Field INSTANCE:Lcn/itcast/n5/Singleton;
+3: ifnonnull     37               // 如果 INSTANCE != null，跳到 37 直接返回
+6: ldc           #3               // class cn/itcast/n5/Singleton
+8: dup                           // 复制栈顶元素（类对象），保证后面 monitorenter/monitorexit 用
+9: astore_0
+10: monitorenter
+11: getstatic    #2               // Field INSTANCE:Lcn/itcast/n5/Singleton;
+14: ifnonnull    27
+17: new          #3               // class cn/itcast/n5/Singleton
+20: dup
+21: invokespecial #4               // Method "<init>":()V
+24: putstatic    #2               // Field INSTANCE:Lcn/itcast/n5/Singleton;
+27: aload_0
+28: monitorexit
+29: goto         37
+32: astore_1
+33: aload_0
+34: monitorexit
+35: aload_1
+36: athrow
+37: getstatic    #2               // Field INSTANCE:Lcn/itcast/n5/Singleton;
+40: areturn
+```
+其中 
+- 17 表示创建对象，将对象引用入栈 // new Singleton 
+- 20 表示复制一份对象引用 // 引用地址 
+- 21 表示利用一个对象引用，调用构造方法 
+- 24 表示利用一个对象引用，赋值给 static INSTANCE 
 
 
 
+也许 jvm 会优化为：先执行 24，再执行 21。如果两个线程 t1，t2 按如下时间序列执行：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-09-11_00-53-31.png)
+这段字节码的隐患在于 `putstatic` 可能在 `<init>` 之前执行，如果没有 `volatile` 修饰 `INSTANCE`，就可能导致另一个线程读到“半初始化”的对象。
 
+
+关键在于 0: getstatic 这行代码在 `monitor` 控制之外，它就像之前举例中不守规则的人，可以越过 `monitor` 读取`INSTANCE` 变量的值 .
+
+这时 t1 还未完全将构造方法执行完毕，如果在构造方法中要执行很多初始化操作，那么 t2 拿到的是将是一个未初始化完毕的单例 .
+
+对 `INSTANCE` 使用 `volatile` 修饰即可，可以禁用指令重排，但要注意在 `JDK 5` 以上的版本的 `volatile` 才会真正有效 .
 
 
 

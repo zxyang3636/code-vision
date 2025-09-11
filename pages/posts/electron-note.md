@@ -1,5 +1,5 @@
 ---
-title: Electron
+title: Electron 基础
 categories: 前端
 tags:
   - Electron

@@ -643,6 +643,177 @@ public final class Singleton {
 对 `INSTANCE` 使用 `volatile` 修饰即可，可以禁用指令重排，但要注意在 `JDK 5` 以上的版本的 `volatile` 才会真正有效 .
 
 
+一个共享变量完全被synchronized 保护，那么这个变量就不会出现原子、有序、可见性问题。但是在以上代码中有问题，是因为这个共享变量并没有完全的被synchronized 保护
+，synchronized 的外面还是有对 INSTANCE 共享变量的使用
+
+:::info
+synchronized是可以保证原子性、可见性、有序性的，但是前提是这个共享变量都交给synchronized来管理
+:::
 
 
+#### dcl问题解决
+
+使用 `volatile` 修饰 `INSTANCE` 变量
+```java
+public final class Singleton {
+    private Singleton() { }
+    private static volatile Singleton INSTANCE = null;
+    
+    public static Singleton getInstance() {
+        // 实例没创建，才会进入内部的 synchronized代码块
+        if (INSTANCE == null) { 
+            synchronized (Singleton.class) { // t2
+                // 也许有其它线程已经创建实例，所以再判断一次
+                if (INSTANCE == null) { // t1
+                    INSTANCE = new Singleton();
+                }
+            }
+        }
+        return INSTANCE;
+    }
+}
+```
+
+字节码上看不出来 volatile 指令的效果
+```java
+// ------------------------------> 加入对 INSTANCE 变量的读屏障
+0: getstatic     #2                      // Field INSTANCE:Lcn/itcast/n5/Singleton;
+3: ifnonnull     37
+6: ldc           #3                      // class cn/itcast/n5/Singleton
+8: dup
+9: astore_0
+10: monitorenter  ------------------> 保证原子性、可见性
+11: getstatic     #2                      // Field INSTANCE:Lcn/itcast/n5/Singleton;
+14: ifnonnull     27
+17: new           #3                      // class cn/itcast/n5/Singleton
+20: dup
+21: invokespecial #4                      // Method "<init>":()V
+24: putstatic     #2                      // Field INSTANCE:Lcn/itcast/n5/Singleton;
+// ------------------------------> 加入对 INSTANCE 变量的写屏障
+27: aload_0
+28: monitorexit  ------------------> 保证原子性、可见性
+29: goto          37
+32: astore_1
+33: aload_0
+34: monitorexit
+35: aload_1
+36: athrow
+37: getstatic     #2                      // Field INSTANCE:Lcn/itcast/n5/Singleton;
+40: areturn
+```
+如上面的注释内容所示，读写 `volatile` 变量时会加入内存屏障（Memory Barrier（Memory Fence）），保证下面两点：
+- 可见性
+  - 写屏障（sfence）保证在该屏障之前的 t1 对共享变量的改动，都同步到主存当中
+  - 而读屏障（lfence）保证在该屏障之后 t2 对共享变量的读取，加载的是主存中最新数据
+- 有序性
+  - 写屏障会确保指令重排序时，不会将写屏障之前的代码排在写屏障之后
+  - 读屏障会确保指令重排序时，不会将读屏障之后的代码排在读屏障之前
+- 更底层是读写变量时使用 lock 指令来多核 CPU 之间的可见性与有序性
+
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-09-12_00-25-53.png)
+
+
+## happens-before
+
+happens-before就是对共享变量可见性的总结（七个规则）
+
+happens-before 规定了对共享变量的写操作对其它线程的读操作可见，它是可见性与有序性的一套规则总结，抛开以下 happens-before 规则，IMM 并不能保证一个线程对共享变量的写，对于其它线程对该共享变量的读可见。
+
+- 线程解锁 m 之前对变量的写，对于接下来对 m 加锁的其它线程对该变量的读可见
+
+```java
+    static int x;
+    static Object m = new Object();
+    new Thread(() -> {
+        synchronized(m) {
+            x = 10;
+        }
+    }, "t1").start();
+    new Thread(() -> {
+        synchronized(m) {
+            System.out.println(x);
+        }
+    }, "t2").start();
+```
+
+
+- 线程对 volatile 变量的写，对接下来其它线程对该变量的读可见
+```java
+volatile static int x;
+
+new Thread(() -> {
+    x = 10;
+}, "t1").start();
+
+new Thread(() -> {
+    System.out.println(x);
+}, "t2").start();
+```
+
+- 线程 start 前对变量的写，对该线程开始后对该变量的读可见
+```java
+static int x;
+x = 10;
+new Thread(() -> {
+    System.out.println(x);
+}, "t2").start();
+```
+
+- 线程结束前对变量的写，对其它线程得知它结束后的读可见（比如其它线程调用 t1.isAlive() 或 t1.join() 等待它结束）
+```java
+    static int x;
+    Thread t1 = new Thread(() -> {
+        x = 10;
+    }, "t1");
+    t1.start();     // 线程结束之前，就会把共享变量的值同步到主存中
+    t1.join();
+    System.out.println(x);
+```
+
+
+- 线程 t1 打断 t2（interrupt）前对变量的写，对于其他线程得知 t2 被打断后对变量的读可见（通过 t2.interrupted 或 t2.isInterrupted）
+
+```java
+static int x;
+
+public static void main(String[] args) {
+    Thread t2 = new Thread(() -> {
+        while (true) {
+            if (Thread.currentThread().isInterrupted()) {
+                System.out.println(x);
+                break;
+            }
+        }
+    }, "t2");
+    t2.start();
+
+    new Thread(() -> {
+        sleep(1);
+        x = 10;
+        t2.interrupt(); // 打断之前对变量的修改，对其他线程是可见的
+    }, "t1").start();
+
+    while (!t2.isInterrupted()) {
+        Thread.yield();
+    }
+    System.out.println(x);
+}
+```
+
+
+- 对变量默认值（0，false，null）的写，对其它线程对该变量的读可见
+- 具有传递性，如果x hb-> y并且y hb-> z 那么有x hb-> z，配合volatile的防指令重排，有下面的例子
+```java
+    volatile static int x;
+    static int y;
+    new Thread(() -> {
+        y = 10;
+        x = 20;     // 写屏障会把，写屏障之前的所有操作都同步到主存中并且还不会重排序，即使之前操作不是volatile
+    }, "t1").start();
+    new Thread(() -> {
+        // x=20 对 t2 可见，同时 y=10 也对 t2 可见
+        System.out.println(x);
+    }, "t2").start();
+```
 

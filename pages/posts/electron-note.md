@@ -17,6 +17,18 @@ Electron 是⼀个 **跨平台** 的 **桌⾯应⽤** 开发框架，开发者�
 
 Electron = Chromium + Node.js + Native API(Electron 原生的 API)
 
+### 常见的桌面GUI
+|名称|语音|优点|缺点|
+|----|----|----|----|
+|QT|C++|跨平台、性能好、生态好|依赖多，程序包大|
+|PyQT|Python|底层集成度高、易上手|授权问题(收费)|
+|WPF|C#|类库丰富、扩展灵活|只支持Windows，程序包大|
+|WinForm|C#|性能好，组件丰富，易上手|只支持Windows，UI差|
+|Swing|Java|基于AWT，组件丰富|性能差，UI一般|
+|NW.js|JS|跨平台性好，界面美观|底层交互差、性能差，包大|
+|Electron|JS|相比NW拓展更好|底层交互差、性能差，包大|
+|CEF|C++|性能好，灵活集成，UI美观|占用资源多，包大|
+
 ## Electron 流程模型
 
 主进程就是个`.js`文件，这个 js 文件是个纯粹的 node 环境；主进程主要目的就是管理渲染进程；主进程可以管理多个渲染进程，主进程只有一个，渲染进程可以有n个
@@ -642,3 +654,233 @@ npm run build
 electron-vite 是⼀个新型构建⼯具，旨在为 Electron 提供更快、更精简的体验
 
 electron-vite 快速、简单且功能强⼤，旨在开箱即⽤。 官⽹地址：https://cn-evite.netlify.app/
+
+
+## 项目实战
+
+### 初始化项目
+
+
+```shell
+npm init vite
+```
+
+安装依赖
+```shell
+npm i
+```
+
+```shell
+npm i electron -D
+```
+
+删除 package.json 中的 "type": "module"。改用 CommonJS 规范
+
+
+根目录创建`main.js`文件
+```js
+const { app, BrowserWindow } = require("electron");
+const createWindow = () => {
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 800,
+  });
+};
+
+app.whenReady().then(() => {
+  createWindow();
+});
+```
+
+修改package.json
+```json
+"main": "main.js",
+"scripts": {
+  "start": "electron ."
+},
+```
+
+**安装nodemon**
+```shell
+npm i nodemon -D
+```
+修改package.json
+```json
+"scripts": {
+  "start": "nodemon --exec electron . --watch ./ --ext .js,.html,.css,.vue"
+},
+```
+
+去掉CSP(Content- Security-Policy)警告，在index.html添加：
+```html
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"/>
+```
+[解决警告](https://blog.csdn.net/hwytree/article/details/121287531)
+
+
+**安装**
+```shell
+npm i electron-win-state -D
+```
+
+根目录创建preload目录，再创建`index.js`
+
+**最终根目录下的main.js**
+```js
+const { app, BrowserWindow } = require("electron");
+const WinState = require("electron-win-state").default;
+const path = require("path");
+
+const createWindow = () => {
+  const winState = new WinState({
+    defaultWidth: 1000,
+    defaultHeight: 800,
+  });
+
+  const win = new BrowserWindow({
+    ...winState.winOptions,
+    webPreferences: {
+      preload: path.resolve(__dirname, "./preload/index.js"),
+    },
+
+  });
+
+  win.loadURL("http://localhost:3000");
+  win.webContents.openDevTools(); // 打开控制台
+  winState.manage(win);
+};
+
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
+```
+
+**package.json**
+```json
+{
+  "name": "pin-box",
+  "private": true,
+  "version": "0.0.0",
+  "main": "main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "nodemon --exec electron . --watch ./ --ext .js,.html,.css,.vue"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/electron": "^1.4.38",
+    "@types/nodemon": "^1.19.6",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "^38.1.0",
+    "electron-win-state": "^1.1.22",
+    "nodemon": "^3.1.10",
+    "vite": "^6.0.1"
+  }
+}
+
+```
+
+**启动项目**
+启动vite项目
+```shell
+npm run dev
+```
+
+启动electron
+```shell
+npm start
+```
+
+main.js中的load地址为vite项目的启动地址
+
+**优雅打开窗口**
+`main.js`中
+```js{16,23,24,25}
+const { app, BrowserWindow } = require("electron");
+const WinState = require("electron-win-state").default;
+const path = require("path");
+
+const createWindow = () => {
+  const winState = new WinState({
+    defaultWidth: 1000,
+    defaultHeight: 800,
+  });
+
+  const win = new BrowserWindow({
+    ...winState.winOptions,
+    webPreferences: {
+      preload: path.resolve(__dirname, "./preload/index.js"),
+    },
+    show: false,
+  });
+
+  win.loadURL("http://localhost:5173");
+  win.webContents.openDevTools(); // 打开控制台
+  winState.manage(win);
+
+  win.on("ready-to-show", () => {
+    win.show();
+  });
+};
+
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+```
+
+
+
+**整理vue项目**
+
+删除components目录下的所有文件
+
+修改App.vue
+```vue
+<template>
+  <div>
+    hello
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, toRefs, onMounted} from 'vue'
+
+</script>
+
+<style scoped lang="scss">
+</style>
+```
+
+src下创建views文件夹，再创建`Home.vue`
+
+
+**安装stylus或者安装sass**
+
+
+
+
+
+
+
+

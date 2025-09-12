@@ -43,6 +43,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/mysql-lock': RouteRecordInfo<'/posts/mysql-lock', '/posts/mysql-lock', Record<never, never>, Record<never, never>>,
     '/posts/mysql-mianshi': RouteRecordInfo<'/posts/mysql-mianshi', '/posts/mysql-mianshi', Record<never, never>, Record<never, never>>,
     '/posts/mysql-mvcc': RouteRecordInfo<'/posts/mysql-mvcc', '/posts/mysql-mvcc', Record<never, never>, Record<never, never>>,
+    '/posts/mysql-otherDbLog': RouteRecordInfo<'/posts/mysql-otherDbLog', '/posts/mysql-otherDbLog', Record<never, never>, Record<never, never>>,
     '/posts/rabbitmq-a': RouteRecordInfo<'/posts/rabbitmq-a', '/posts/rabbitmq-a', Record<never, never>, Record<never, never>>,
     '/posts/spring-cloud': RouteRecordInfo<'/posts/spring-cloud', '/posts/spring-cloud', Record<never, never>, Record<never, never>>,
     '/posts/spring-mj': RouteRecordInfo<'/posts/spring-mj', '/posts/spring-mj', Record<never, never>, Record<never, never>>,

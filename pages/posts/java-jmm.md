@@ -819,3 +819,8 @@ public static void main(String[] args) {
     }, "t2").start();
 ```
 
+
+**总结**
+
+- 可见性 - 由 JVM 缓存优化引起
+- 有序性 - 由 JVM 指令重排序优化引起

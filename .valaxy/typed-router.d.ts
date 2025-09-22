@@ -47,6 +47,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/rabbitmq-a': RouteRecordInfo<'/posts/rabbitmq-a', '/posts/rabbitmq-a', Record<never, never>, Record<never, never>>,
     '/posts/spring-cloud': RouteRecordInfo<'/posts/spring-cloud', '/posts/spring-cloud', Record<never, never>, Record<never, never>>,
     '/posts/spring-mj': RouteRecordInfo<'/posts/spring-mj', '/posts/spring-mj', Record<never, never>, Record<never, never>>,
+    '/posts/uniapp-dev': RouteRecordInfo<'/posts/uniapp-dev', '/posts/uniapp-dev', Record<never, never>, Record<never, never>>,
     '/posts/vue3-project': RouteRecordInfo<'/posts/vue3-project', '/posts/vue3-project', Record<never, never>, Record<never, never>>,
     '/posts/vue3-s': RouteRecordInfo<'/posts/vue3-s', '/posts/vue3-s', Record<never, never>, Record<never, never>>,
     '/posts/xiaoxi-socket': RouteRecordInfo<'/posts/xiaoxi-socket', '/posts/xiaoxi-socket', Record<never, never>, Record<never, never>>,

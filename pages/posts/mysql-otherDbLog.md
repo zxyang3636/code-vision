@@ -115,7 +115,7 @@ SET GLOBAL general_log=on; # 开启通用查询日志
 ```
 
 ```bash
-SET GLOBAL general_log_file=’path/filename’; # 设置日志文件保存位置
+SET GLOBAL general_log_file='path/filename'; # 设置日志文件保存位置
 ```
 对应的，关闭操作SQL命令如下：
 
@@ -137,7 +137,11 @@ SHOW VARIABLES LIKE 'general_log%';
 从 `SHOW VARIABLES LIKE 'general_log%'` 结果中可以看到通用查询日志的位置。
 
 ```bash
-日志。。。
+# 进入到通用查询日志目录
+cd /var/lib/mysql
+
+# 查看通用查询日志，即可看到操作的任务记录
+vi xxxx.log
 ```
 
 在通用查询日志里面，我们可以清楚地看到，什么时候开启了新的客户端登陆数据库，登录之后做了什么 SQL 操作，针对的是哪个数据表等信息。
@@ -190,6 +194,7 @@ SHOW VARIABLES LIKE 'general_log%';
 使用如下命令重新生成查询日志文件，具体命令如下。刷新MySQL数据目录，发现创建了新的日志文件。前提一定要开启通用日志。
 
 ```bash
+# 刷新 MySQL 的日志文件
 mysqladmin -uroot -p flush-logs
 ```
 
@@ -198,8 +203,21 @@ mysqladmin -uroot -p flush-logs
 ```bash
 cd mysql-data-directory # 输入自己的通用日志文件所在目录
 mv mysql.general.log mysql.general.log.old # 指定旧的文件名 以及 新的文件名
-mysqladmin -uroot -p flush-logs
+mysqladmin -uroot -p flush-logs  # 必须是在日志开启的情况下，才能刷新日志
 ```
+
+:::info
+`flush_logs` 会根据你启用的日志类型，触发不同的“滚动/刷新”动作：
+1. 错误日志 (error log)
+- 把缓存中的内容立即写到错误日志文件。
+2. 二进制日志 (binlog)
+- 当前 binlog 文件会被关闭，生成一个新的 binlog 文件 (序号 +1)。
+- 常用于主从复制，或手动切分 binlog。
+3. 中继日志 (relay log)
+- 在从库上，会生成新的 relay log 文件。
+4. 通用查询日志 (general log) 和慢查询日志 (slow query log)
+- 如果开启了这些日志，也会刷新，并生成新的文件。
+:::
 
 :::tip
 mv 命令（全称 move）主要用于移动或重命名文件和目录。

@@ -259,9 +259,245 @@ mv -i mydir/ /backup/
 ```
 :::
 
+**docker容器中查看通用查询日志**
+```bash
+# 先进入容器中
+docker exec -it mysql-container bash
+# 进入mysql中
+mysql -uroot -p
+
+# 在mysql中执行
+SET GLOBAL general_log = 'ON';
+
+# 查看文件位置
+mysql> SHOW VARIABLES LIKE 'general_log%';
++------------------+---------------------------------+
+| Variable_name    | Value                           |
++------------------+---------------------------------+
+| general_log      | ON                              |
+| general_log_file | /var/lib/mysql/ca39d70d7ced.log |
++------------------+---------------------------------+
+2 rows in set (0.00 sec)
+
+
+# 退出mysql客户端
+\q
+
+# 然后在容器里看日志文件
+tail -n 50 -f /var/lib/mysql/ca39d70d7ced.log
+
+
+root@ca39d70d7ced:/var/lib/mysql# cat /var/lib/mysql/ca39d70d7ced.log
+/usr/sbin/mysqld, Version: 8.0.27 (MySQL Community Server - GPL). started with:
+Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
+Time                 Id Command    Argument
+2025-10-02T13:35:17.042065Z     41848 Query     SHOW VARIABLES LIKE '%general%'
+2025-10-02T13:35:29.205100Z     41848 Query     show databases
+2025-10-02T13:35:46.124200Z     41848 Query     SELECT DATABASE()
+2025-10-02T13:35:46.124418Z     41848 Init DB   zy_uums
+2025-10-02T13:35:46.125422Z     41848 Query     show databases
+2025-10-02T13:35:46.126249Z     41848 Query     show tables
+2025-10-02T13:35:46.127311Z     41848 Field List        log 
+
+```
+
+
 
 ## 错误日志(error log)
 
+错误日志记录了 MySQL 服务器启动、停止运行的时间，以及系统启动、运行和停止过程中的诊断信息，包括`错误`、`警告`和`提示`等。
+
+通过错误日志可以查看系统的运行状态，便于即时发现故障、修复故障。如果 MySQL 服务`出现异常`，错误日志是发现问题、解决故障的`首选`。
+
+### 启动日志
+
+在MySQL数据库中，错误日志功能是 **默认开启** 的。而且，错误日志 **无法被禁止** 。
+
+默认情况下，错误日志存储在MySQL数据库的数据文件夹下，名称默认为 `mysqld.log` （Linux系统）或 `hostname.err` （mac系统）。如果需要制定文件名，则需要在`my.cnf`或者`my.ini`中做如下配置：
+```bash
+[mysqld]
+log-error=[path/[filename]] #path为日志文件所在的目录路径，filename为日志文件名
+```
+修改配置项后，需要重启MySQL服务以生效。
+
+### 查看日志
+MySQL错误日志是以文本文件形式存储的，可以使用文本编辑器直接查看。
+
+查询错误日志的存储路径：
+```bash
+mysql> SHOW VARIABLES LIKE 'log_err%';
++----------------------------+----------------------------------------+
+| Variable_name              | Value                                  |
++----------------------------+----------------------------------------+
+| log_error                  | stderr                                 |
+| log_error_services         | log_filter_internal; log_sink_internal |
+| log_error_suppression_list |                                        |
+| log_error_verbosity        | 2                                      |
++----------------------------+----------------------------------------+
+4 rows in set (0.00 sec)
+
+# MySQL 的错误日志没有写入文件，而是输出到标准错误（stderr）。
+# 在 Docker 容器里，标准输出（stdout）和标准错误（stderr）都会被 Docker 捕获并写到容器日志里。
+# 直接在宿主机执行：
+docker logs -f mysql-container
+```
+
+```bash
+[root@iZbp143l1lire02d1p2giaZ ~]# docker logs mysql
+2024-08-03 08:55:08+00:00 [Note] [Entrypoint]: Entrypoint script for MySQL Server 8.0.27-1debian10 started.
+2024-08-03 08:55:08+00:00 [Note] [Entrypoint]: Switching to dedicated user 'mysql'
+2024-08-03 08:55:08+00:00 [Note] [Entrypoint]: Entrypoint script for MySQL Server 8.0.27-1debian10 started.
+2024-08-03 08:55:08+00:00 [Note] [Entrypoint]: Initializing database files
+2024-08-03T08:55:08.717819Z 0 [System] [MY-013169] [Server] /usr/sbin/mysqld (mysqld 8.0.27) initializing of server in progress as process 41
+2024-08-03T08:55:08.726202Z 1 [System] [MY-013576] [InnoDB] InnoDB initialization has started.
+2024-08-03T08:55:09.567909Z 1 [System] [MY-013577] [InnoDB] InnoDB initialization has ended.
+.....
+```
+
+在正常情况下，执行结果中可以看到错误日志文件是mysqld.log，位于MySQL默认的数据目录下。
+```bash
+mysql> SHOW VARIABLES LIKE 'log_err%';
++----------------------------+----------------------------------------+
+| Variable_name              | Value                                  |
++----------------------------+----------------------------------------+
+| log_error                  | /var/log/mysqld.log                    |
+| log_error_services         | log_filter_internal; log_sink_internal |
+| log_error_suppression_list |                                        |
+| log_error_verbosity        | 2                                      |
++----------------------------+----------------------------------------+
+4 rows in set (0.01 sec)
+```
+
+错误日志文件中记录了服务器启动的时间，以及存储引擎 InnoDB 启动和停止的时间等。我们在做初始化时候生成的数据库初始密码也是记录在 error.log 中。
 
 
+
+
+### 删除\刷新日志
+对于很久以前的错误日志，数据库管理员查看这些错误日志的可能性不大，可以将这些错误日志删除， 以保证MySQL服务器上的 `硬盘空间` 。MySQL的错误日志是以文本文件的形式存储在文件系统中的，可以 `直接删除` 。
+
+- 第一步（方式1）：删除操作
+```bash
+rm -f /var/lib/mysql/mysqld.log
+```
+
+- 第一步（方式2）：重命名文件
+```bash
+mv /var/log/mysqld.log /var/log/mysqld.log.old
+```
+
+- 第二步：重建日志
+```bash
+mysqladmin -uroot -p flush-logs
+```
+可能会报错
+```bash
+[root@atguigu01 log]# mysqladmin -uroot -p flush-logs
+Enter password:
+mysqladmin: refresh failed; error: 'Could not open file '/var/log/mysqld.log' for
+error logging.'
+```
+官网提示：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-02_22-21-58.png)
+
+我们需要进行 补充操作：
+```bash
+install -omysql -gmysql -m0644 /dev/null /var/log/mysqld.log
+```
+`flush-logs` 指令操作:
+- `MySQL 5.5.7`以前的版本，flush-logs将错误日志文件重命名为`filename.err_old`，并创建新的日志文件。
+- 从`MySQL 5.5.7`开始，flush-logs只是重新打开日志文件，并不做日志备份和创建的操作。
+- 如果日志文件不存在，MySQL启动或者执行flush-logs时会自动创建新的日志文件。重新创建错误日志，大小为0字节。
+
+### MySQL8.0新特性
+
+MySQL8.0里对错误日志的改进。MySQL8.0的错误日志可以理解为一个全新的日志，在这个版本里，接受了来自社区的广泛批评意见，在这些意见和建议的基础上生成了新的日志。
+下面这些是来自社区的意见：
+- 默认情况下内容过于冗长
+- 遗漏了有用的信息
+- 难以过滤某些信息
+- 没有标识错误信息的子系统源
+- 没有错误代码，解析消息需要识别错误
+- 引导消息可能会丢失
+- 固定格式
+
+针对这些意见，MySQL做了如下改变：
+- 采用组件架构，通过不同的组件执行日志的写入和过滤功能
+- 写入错误日志的全部信息都具有唯一的错误代码从10000开始
+- 增加了一个新的消息分类《system》用于在错误日志中始终可见的非错误但服务器状态更改事件的消息
+- 增加了额外的附加信息，例如关机时的版本信息，谁发起的关机等等
+- 两种过滤方式，Internal和Dragnet
+- 三种写入形式，经典、JSON和syseventlog
+
+>小结：
+>
+>通常情况下，管理员不需要查看错误日志。但是，MySQL服务器发生异常时，管理员可以从错误日志中找到发生异常的时间、原因，然后根据这些信息来解决异常。
+
+
+
+## 二进制日志(bin log)
+
+binlog可以说是MySQL中比较 `重要` 的日志了，在日常开发及运维过程中，经常会遇到。
+
+binlog即binary log，二进制日志文件，也叫作变更日志（update log）。它记录了数据库所有执行的 DDL 和 DML 等数据库更新事件的语句，但是不包含没有修改任何数据的语句（如数据查询语句select、 show等）。
+
+它以`事件形式`记录并保存在`二进制文件`中。通过这些信息，我们可以再现数据更新操作的全过程。
+
+>如果想要记录所有语句（例如，为了识别有问题的查询），需要使用通用查询日志。
+
+binlog主要应用场景：
+
+- 一是用于**数据恢复**，如果MySQL数据库意外停止，可以通过二进制日志文件来查看用户执行了哪些操作，对数据库服务器文件做了哪些修改，然后根据二进制日志文件中的记录来恢复数据库服务器。
+- 二是用于**数据复制**，由于日志的延续性和时效性，master把它的二进制日志传递给slaves来达到master-slave数据一致的目的。
+
+可以说MySQL数据库的**数据备份**、**主备**、**主主**、**主从**都离不开binlog，需要依靠binlog来同步数据，保证数据一致性。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-02_22-38-28.png)
+
+
+
+
+### 查看默认情况
+查看记录二进制日志是否开启：在MySQL8中默认情况下，二进制文件是开启的。
+
+```bash
+docker exec -it mysql bash
+
+mysql -uroot -p
+Enter password: 
+
+mysql> show variables like '%log_bin%';
++---------------------------------+-----------------------------+
+| Variable_name                   | Value                       |
++---------------------------------+-----------------------------+
+| log_bin                         | ON                          |
+| log_bin_basename                | /var/lib/mysql/binlog       |
+| log_bin_index                   | /var/lib/mysql/binlog.index |
+| log_bin_trust_function_creators | OFF                         |
+| log_bin_use_v1_row_events       | OFF                         |
+| sql_log_bin                     | ON                          |
++---------------------------------+-----------------------------+
+6 rows in set (0.02 sec)
+```
+
+- `log_bin_basename`：是binlog日志的基本文件名，后面会追加标识来表示每一个文件
+- `log_bin_index`：是binlog文件的索引文件，这个文件管理了所有的binlog文件的目录
+- `log_bin_trust_function_creators`：限制存储过程，前面我们已经讲过了，这是因为二进制日志的一个重要功能是用于主从复制，而存储函数有可能导致主从的数据不一致。所以当开启二进制日志后，需要限制存储函数的创建、修改、调用
+- `log_bin_use_v1_row_events` 此只读系统变量已弃用。ON表示使用版本1二进制日志行，OFF表示使用版本2二进制日志行（MySQL 5.6 的默认值为2）。
+
+```bash
+root@b5bc2ea3fb2c:/# cd /var/lib/mysql/   
+root@b5bc2ea3fb2c:/var/lib/mysql# ls
+'#ib_16384_0.dblwr'   binlog.index      hm@002ditem      ib_logfile0   nacos                server-key.pem
+'#ib_16384_1.dblwr'   ca-key.pem        hm@002dpay       ib_logfile1   performance_schema   sys
+'#innodb_temp'        ca.pem            hm@002dtrade     ibdata1       private_key.pem      undo_001
+ auto.cnf             client-cert.pem   hm@002duser      ibtmp1        public_key.pem       undo_002
+ binlog.000030        client-key.pem    hmall            mysql         seata
+ binlog.000031        hm@002dcart       ib_buffer_pool   mysql.ibd     server-cert.pem
+root@b5bc2ea3fb2c:/var/lib/mysql# 
+```
+我们会发现有很多binlog文件，这是因为，每当mysql服务器重启的时候，都会帮我们创建一个新的binlog文件。
+
+### 日志参数设置
+
+### 查看日志
 

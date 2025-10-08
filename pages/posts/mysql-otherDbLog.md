@@ -485,6 +485,9 @@ mysql> show variables like '%log_bin%';
 - `log_bin_use_v1_row_events` 此只读系统变量已弃用。ON表示使用版本1二进制日志行，OFF表示使用版本2二进制日志行（MySQL 5.6 的默认值为2）。
 
 ```bash
+mysql> \q
+Bye
+
 root@b5bc2ea3fb2c:/# cd /var/lib/mysql/   
 root@b5bc2ea3fb2c:/var/lib/mysql# ls
 '#ib_16384_0.dblwr'   binlog.index      hm@002ditem      ib_logfile0   nacos                server-key.pem
@@ -499,5 +502,620 @@ root@b5bc2ea3fb2c:/var/lib/mysql#
 
 ### 日志参数设置
 
+**方式1：永久性方式**
+
+修改MySQL的 `/ect/my.cnf` 或 `my.ini` 文件可以设置二进制日志的相关参数：
+
+```bash
+[mysqld]
+#启用二进制日志
+log-bin=atguigu-bin
+binlog_expire_logs_seconds=600
+max_binlog_size=100M
+```
+若是docker环境，进入到我们挂载的目录，进入conf目录，编辑my.cnf文件，添加如上内容。
+
+提示:
+1. log-bin=mysql-bin #打开日志(主机需要打开)，这个mysql-bin也可以自定义，这里也可以加上路径，
+如:/home/www/mysql_bin_log/mysql-bin
+2. binlog_expire_logs_seconds: 此参数控制二进制日志文件保留的时长，单位是**秒**，默认2592000 30天
+--14400 4小时;86400 1天;259200 3天;
+3. max_binlog_size: 控制单个二进制日志大小，当前日志文件大小超过此变量时，执行切换动作。此参数
+的**最大和默认值是1GB**，该设置并**不能严格控制Binlog的大小**，尤其是Binlog比较靠近最大值而又遇到一
+个比较大事务时，为了保证事务的完整性，可能不做切换日志的动作(一个事务还没结束，结果这个文件大小满了)，只能将该事务的所有SQL都记录
+进当前日志，直到事务结束。一般情况下可采取默认值。
+
+重新启动MySQL服务，查询二进制日志的信息，执行结果：
+```bash
+systemctl restart mysqld
+# 或者
+docker restart mysql
+
+[root@192 conf]# docker exec -it mysql bash
+root@b5bc2ea3fb2c:/# mysql -uroot -p
+Enter password: 
+
+mysql> show variables like '%log_bin%';
++---------------------------------+----------------------------------+
+| Variable_name                   | Value                            |
++---------------------------------+----------------------------------+
+| log_bin                         | ON                               |
+| log_bin_basename                | /var/lib/mysql/atguigu-bin       |
+| log_bin_index                   | /var/lib/mysql/atguigu-bin.index |
+| log_bin_trust_function_creators | OFF                              |
+| log_bin_use_v1_row_events       | OFF                              |
+| sql_log_bin                     | ON                               |
++---------------------------------+----------------------------------+
+6 rows in set (0.01 sec)
+
+```
+进入之后即可看到该目录`atguigu-bin.000001`,`atguigu-bin.index`
+```bash
+root@b5bc2ea3fb2c:/# cd /var
+root@b5bc2ea3fb2c:/var# cd lib/
+root@b5bc2ea3fb2c:/var/lib# cd mysql/
+root@b5bc2ea3fb2c:/var/lib/mysql# ls
+'#ib_16384_0.dblwr'   binlog.000031     client-key.pem   ib_buffer_pool   nacos                sys
+'#ib_16384_1.dblwr'   binlog.000032     hm@002dcart      ib_logfile0      performance_schema   undo_001
+'#innodb_temp'        binlog.000033     hm@002ditem      ib_logfile1      private_key.pem      undo_002
+ atguigu-bin.000001   binlog.index      hm@002dpay       ibdata1          public_key.pem
+ atguigu-bin.index    ca-key.pem        hm@002dtrade     ibtmp1           seata
+ auto.cnf             ca.pem            hm@002duser      mysql            server-cert.pem
+ binlog.000030        client-cert.pem   hmall            mysql.ibd        server-key.pem
+root@b5bc2ea3fb2c:/var/lib/mysql# 
+```
+
+**设置带文件夹的bin-log日志存放目录**
+
+如果想改变日志文件的目录和名称，可以对my.cnf或my.ini中的log_bin参数修改如下：
+```bash
+[mysqld]
+log-bin="/var/lib/mysql/binlog/atguigu-bin"
+```
+注意：新建的文件夹需要使用mysql用户，使用下面的命令即可。
+```bash
+chown -R -v mysql:mysql binlog
+```
+重启MySQL服务之后，新的二进制日志文件将出现在/var/lib/mysql/binlog/文件夹下面:
+```bash
+mysql> show variables like '%log_bin%';
++---------------------------------+--------------------------------------------+
+| Variable_name                   | Value                                      |
++---------------------------------+--------------------------------------------+
+| log_bin                         | ON                                         |
+| log_bin_basename                | /var/lib/mysql/binlog/atguigu-bin          |
+| log_bin_index                   | /var/lib/mysql/binlog/atguigu-bin.index    |
+| log_bin_trust_function_creators | OFF                                        |
+| log_bin_use_v1_row_events       | OFF                                        |
+| sql_log_bin                     | ON                                         |
++---------------------------------+--------------------------------------------+
+6 rows in set (0.00 sec)
+
+[root@node1 binlog]# ls
+atguigu-bin.000001  atguigu-bin.index
+[root@node1 binlog]# pwd
+/var/lib/mysql/binlog
+```
+:::warning
+**数据库文件最好不要与日志文件放在同一个磁盘上**！这样，当数据库文件所在的磁盘发生故障时，可以使用日志文件恢复数据。
+:::
+
+**方式2：临时性方式**
+
+如果不希望通过修改配置文件并重启的方式设置二进制日志的话，还可以使用如下指令，需要注意的是 在mysql8中只有 会话级别 的设置，没有了global级别的设置。
+```bash
+# global 级别
+mysql> set global sql_log_bin=0;
+ERROR 1228 (HY000): Variable 'sql_log_bin' is a SESSION variable and can`t be used
+with SET GLOBAL
+
+# session级别，只能使用session级别
+mysql> SET sql_log_bin=0;
+Query OK, 0 rows affected (0.01 秒)
+```
+
+
+
 ### 查看日志
 
+当MySQL创建二进制日志文件时，先创建一个以“filename”为名称、以“.index”为后缀的文件，再创建一 个以“filename”为名称、以“.000001”为后缀的文件。
+
+MySQL服务 `重新启动一次` ，以“.000001”为后缀的文件就会增加一个，并且后缀名按1递增。即日志文件的 个数与MySQL服务启动的次数相同；如果日志长度超过了 `max_binlog_size` 的上限（默认是1GB），就会创建一个新的日志文件。
+
+查看当前的二进制日志文件列表及大小。指令如下：
+
+```bash
+mysql> SHOW BINARY LOGS;
++--------------------+-----------+-----------+
+| Log_name           | File_size | Encrypted |
++--------------------+-----------+-----------+
+| atguigu-bin.000001 | 156       | No        |
++--------------------+-----------+-----------+
+1 行于数据集 (0.02 秒)
+```
+所有对数据库的修改都会记录在binlog中。但binlog是二进制文件，无法直接查看，想要更直观的观测它就要借助`mysqlbinlog`命令工具了。指令如下：在查看执行，先执行一条SQL语句，如下
+
+随便做几个增删改操作，我们再执行`SHOW BINARY LOGS;` , 我们会发现File_size变大了；
+```bash
+update student set name='张三_back' where id=1;
+```
+开始查看binlog
+
+```bash
+# 注意查看的这个文件一定要看最新的
+root@b5bc2ea3fb2c:/var/lib/mysql# mysqlbinlog "/var/lib/mysql/atguigu-bin.000001"
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 4
+#251008 23:58:55 server id 1  end_log_pos 125 CRC32 0x61e1c329  Start: binlog v 4, server v 8.0.27 created 251008 23:58:55 at startup
+# Warning: this binlog is either in use or was not closed properly.
+ROLLBACK/*!*/;
+BINLOG '
+P4rmaA8BAAAAeQAAAH0AAAABAAQAOC4wLjI3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAA/iuZoEwANAAgAAAAABAAEAAAAYQAEGggAAAAICAgCAAAACgoKKioAEjQA
+CigBKcPhYQ==
+'/*!*/;
+# at 125
+#251008 23:58:55 server id 1  end_log_pos 156 CRC32 0xaf26c362  Previous-GTIDs
+# [empty]
+# at 156
+#251009  0:28:19 server id 1  end_log_pos 235 CRC32 0x603ebf33  Anonymous_GTID  last_committed=0        sequence_number=1     rbr_only=yes    original_committed_timestamp=1759940899272405   immediate_commit_timestamp=1759940899272405  transaction_length=339
+/*!50718 SET TRANSACTION ISOLATION LEVEL READ COMMITTED*//*!*/;
+# original_commit_timestamp=1759940899272405 (2025-10-09 00:28:19.272405 CST)
+# immediate_commit_timestamp=1759940899272405 (2025-10-09 00:28:19.272405 CST)
+/*!80001 SET @@session.original_commit_timestamp=1759940899272405*//*!*/;
+/*!80014 SET @@session.original_server_version=80027*//*!*/;
+/*!80014 SET @@session.immediate_server_version=80027*//*!*/;
+SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+# at 235
+#251009  0:28:19 server id 1  end_log_pos 322 CRC32 0x2e028b2c  Query   thread_id=12    exec_time=0     error_code=0
+SET TIMESTAMP=1759940899/*!*/;
+SET @@session.pseudo_thread_id=12/*!*/;
+SET @@session.foreign_key_checks=1, @@session.sql_auto_is_null=0, @@session.unique_checks=1, @@session.autocommit=1/*!*/;
+SET @@session.sql_mode=1168113696/*!*/;
+SET @@session.auto_increment_increment=1, @@session.auto_increment_offset=1/*!*/;
+/*!\C utf8mb4 *//*!*/;
+SET @@session.character_set_client=255,@@session.collation_connection=255,@@session.collation_server=224/*!*/;
+SET @@session.time_zone='SYSTEM'/*!*/;
+SET @@session.lc_time_names=0/*!*/;
+SET @@session.collation_database=DEFAULT/*!*/;
+/*!80011 SET @@session.default_collation_for_utf8mb4=255*//*!*/;
+BEGIN
+/*!*/;
+# at 322
+#251009  0:28:19 server id 1  end_log_pos 396 CRC32 0x1a3d78f4  Table_map: `hm-trade`.`order` mapped to number 98
+# at 396
+#251009  0:28:19 server id 1  end_log_pos 464 CRC32 0x64ee3309  Write_rows: table id 98 flags: STMT_END_F
+
+BINLOG '
+I5HmaBMBAAAASgAAAIwBAAAAAGIAAAAAAAEACGhtLXRyYWRlAAVvcmRlcgAMCAMBCAERERERERER
+BwAAAAAAAADwDwEBIPR4PRo=
+I5HmaB4BAAAARAAAANABAAAAAGIAAAAAAAEAAgAM///ABwEAyE5nbcEb4FoBAAIDAAAAAAAAAAFo
+5pEjaOaRIwkz7mQ=
+'/*!*/;
+# at 464
+#251009  0:28:19 server id 1  end_log_pos 495 CRC32 0x67f243ac  Xid = 1357
+COMMIT/*!*/;
+# at 495
+#251009  0:28:42 server id 1  end_log_pos 574 CRC32 0xe1964ead  Anonymous_GTID  last_committed=1        sequence_number=2     rbr_only=yes    original_committed_timestamp=1759940922068152   immediate_commit_timestamp=1759940922068152  transaction_length=386
+/*!50718 SET TRANSACTION ISOLATION LEVEL READ COMMITTED*//*!*/;
+# original_commit_timestamp=1759940922068152 (2025-10-09 00:28:42.068152 CST)
+# immediate_commit_timestamp=1759940922068152 (2025-10-09 00:28:42.068152 CST)
+/*!80001 SET @@session.original_commit_timestamp=1759940922068152*//*!*/;
+/*!80014 SET @@session.original_server_version=80027*//*!*/;
+/*!80014 SET @@session.immediate_server_version=80027*//*!*/;
+SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+# at 574
+#251009  0:28:42 server id 1  end_log_pos 670 CRC32 0xdfe894fe  Query   thread_id=12    exec_time=0     error_code=0
+SET TIMESTAMP=1759940922/*!*/;
+BEGIN
+/*!*/;
+# at 670
+#251009  0:28:42 server id 1  end_log_pos 744 CRC32 0x0860a7dd  Table_map: `hm-trade`.`order` mapped to number 98
+# at 744
+#251009  0:28:42 server id 1  end_log_pos 850 CRC32 0x81c6dd08  Update_rows: table id 98 flags: STMT_END_F
+
+BINLOG '
+OpHmaBMBAAAASgAAAOgCAAAAAGIAAAAAAAEACGhtLXRyYWRlAAVvcmRlcgAMCAMBCAERERERERER
+BwAAAAAAAADwDwEBIN2nYAg=
+OpHmaB8BAAAAagAAAFIDAAAAAGIAAAAAAAEAAgAM/////8AHAQDITmdtwRvgWgEAAgMAAAAAAAAA
+AWjmkSNo5pEjgAcBAMhOZ23BG+BaAQACAwAAAAAAAAACaOaRI2jmkTpo5pE6CN3GgQ==
+'/*!*/;
+# at 850
+#251009  0:28:42 server id 1  end_log_pos 881 CRC32 0xf11d6f94  Xid = 1381
+COMMIT/*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+root@b5bc2ea3fb2c:/var/lib/mysql# 
+
+```
+执行结果可以看到，这是一个简单的日志文件，日志中记录了用户的一些操作，这里并没有出现具体的SQL语句，这是因为binlog关键字后面的内容是经过编码后的二进制日志。
+这里一个update语句包含如下事件
+- Query事件 负责开始一个事务(BEGIN)
+- Table_map事件 负责映射需要的表
+- Update_rows事件 负责写入数据
+- Xid事件 负责结束事务
+下面命令将行事件以**伪SQL的形式**表现出来
+
+使用`mysqlbinlog -v`
+```bash
+root@b5bc2ea3fb2c:/var/lib/mysql# mysqlbinlog -v "/var/lib/mysql/atguigu-bin.000001"
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 4
+#251008 23:58:55 server id 1  end_log_pos 125 CRC32 0x61e1c329  Start: binlog v 4, server v 8.0.27 created 251008 23:58:55 at startup
+# Warning: this binlog is either in use or was not closed properly.
+ROLLBACK/*!*/;
+BINLOG '
+P4rmaA8BAAAAeQAAAH0AAAABAAQAOC4wLjI3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAA/iuZoEwANAAgAAAAABAAEAAAAYQAEGggAAAAICAgCAAAACgoKKioAEjQA
+CigBKcPhYQ==
+'/*!*/;
+# at 125
+#251008 23:58:55 server id 1  end_log_pos 156 CRC32 0xaf26c362  Previous-GTIDs
+# [empty]
+# at 156
+#251009  0:28:19 server id 1  end_log_pos 235 CRC32 0x603ebf33  Anonymous_GTID  last_committed=0        sequence_number=1     rbr_only=yes    original_committed_timestamp=1759940899272405   immediate_commit_timestamp=1759940899272405  transaction_length=339
+/*!50718 SET TRANSACTION ISOLATION LEVEL READ COMMITTED*//*!*/;
+# original_commit_timestamp=1759940899272405 (2025-10-09 00:28:19.272405 CST)
+# immediate_commit_timestamp=1759940899272405 (2025-10-09 00:28:19.272405 CST)
+/*!80001 SET @@session.original_commit_timestamp=1759940899272405*//*!*/;
+/*!80014 SET @@session.original_server_version=80027*//*!*/;
+/*!80014 SET @@session.immediate_server_version=80027*//*!*/;
+SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+# at 235
+#251009  0:28:19 server id 1  end_log_pos 322 CRC32 0x2e028b2c  Query   thread_id=12    exec_time=0     error_code=0
+SET TIMESTAMP=1759940899/*!*/;
+SET @@session.pseudo_thread_id=12/*!*/;
+SET @@session.foreign_key_checks=1, @@session.sql_auto_is_null=0, @@session.unique_checks=1, @@session.autocommit=1/*!*/;
+SET @@session.sql_mode=1168113696/*!*/;
+SET @@session.auto_increment_increment=1, @@session.auto_increment_offset=1/*!*/;
+/*!\C utf8mb4 *//*!*/;
+SET @@session.character_set_client=255,@@session.collation_connection=255,@@session.collation_server=224/*!*/;
+SET @@session.time_zone='SYSTEM'/*!*/;
+SET @@session.lc_time_names=0/*!*/;
+SET @@session.collation_database=DEFAULT/*!*/;
+/*!80011 SET @@session.default_collation_for_utf8mb4=255*//*!*/;
+BEGIN
+/*!*/;
+# at 322
+#251009  0:28:19 server id 1  end_log_pos 396 CRC32 0x1a3d78f4  Table_map: `hm-trade`.`order` mapped to number 98
+# at 396
+#251009  0:28:19 server id 1  end_log_pos 464 CRC32 0x64ee3309  Write_rows: table id 98 flags: STMT_END_F
+
+BINLOG '
+I5HmaBMBAAAASgAAAIwBAAAAAGIAAAAAAAEACGhtLXRyYWRlAAVvcmRlcgAMCAMBCAERERERERER
+BwAAAAAAAADwDwEBIPR4PRo=
+I5HmaB4BAAAARAAAANABAAAAAGIAAAAAAAEAAgAM///ABwEAyE5nbcEb4FoBAAIDAAAAAAAAAAFo
+5pEjaOaRIwkz7mQ=
+'/*!*/;
+### INSERT INTO `hm-trade`.`order`
+### SET
+###   @1=2000000000000000001
+###   @2=88800
+###   @3=2
+###   @4=3
+###   @5=1
+###   @6=1759940899
+###   @7=NULL
+###   @8=NULL
+###   @9=NULL
+###   @10=NULL
+###   @11=NULL
+###   @12=1759940899
+# at 464
+#251009  0:28:19 server id 1  end_log_pos 495 CRC32 0x67f243ac  Xid = 1357
+COMMIT/*!*/;
+# at 495
+#251009  0:28:42 server id 1  end_log_pos 574 CRC32 0xe1964ead  Anonymous_GTID  last_committed=1        sequence_number=2     rbr_only=yes    original_committed_timestamp=1759940922068152   immediate_commit_timestamp=1759940922068152  transaction_length=386
+/*!50718 SET TRANSACTION ISOLATION LEVEL READ COMMITTED*//*!*/;
+# original_commit_timestamp=1759940922068152 (2025-10-09 00:28:42.068152 CST)
+# immediate_commit_timestamp=1759940922068152 (2025-10-09 00:28:42.068152 CST)
+/*!80001 SET @@session.original_commit_timestamp=1759940922068152*//*!*/;
+/*!80014 SET @@session.original_server_version=80027*//*!*/;
+/*!80014 SET @@session.immediate_server_version=80027*//*!*/;
+SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+# at 574
+#251009  0:28:42 server id 1  end_log_pos 670 CRC32 0xdfe894fe  Query   thread_id=12    exec_time=0     error_code=0
+SET TIMESTAMP=1759940922/*!*/;
+BEGIN
+/*!*/;
+# at 670
+#251009  0:28:42 server id 1  end_log_pos 744 CRC32 0x0860a7dd  Table_map: `hm-trade`.`order` mapped to number 98
+# at 744
+#251009  0:28:42 server id 1  end_log_pos 850 CRC32 0x81c6dd08  Update_rows: table id 98 flags: STMT_END_F
+
+BINLOG '
+OpHmaBMBAAAASgAAAOgCAAAAAGIAAAAAAAEACGhtLXRyYWRlAAVvcmRlcgAMCAMBCAERERERERER
+BwAAAAAAAADwDwEBIN2nYAg=
+OpHmaB8BAAAAagAAAFIDAAAAAGIAAAAAAAEAAgAM/////8AHAQDITmdtwRvgWgEAAgMAAAAAAAAA
+AWjmkSNo5pEjgAcBAMhOZ23BG+BaAQACAwAAAAAAAAACaOaRI2jmkTpo5pE6CN3GgQ==
+'/*!*/;
+### UPDATE `hm-trade`.`order`
+### WHERE
+###   @1=2000000000000000001
+###   @2=88800
+###   @3=2
+###   @4=3
+###   @5=1
+###   @6=1759940899
+###   @7=NULL
+###   @8=NULL
+###   @9=NULL
+###   @10=NULL
+###   @11=NULL
+###   @12=1759940899
+### SET
+###   @1=2000000000000000001
+###   @2=88800
+###   @3=2
+###   @4=3
+###   @5=2
+###   @6=1759940899
+###   @7=1759940922
+###   @8=NULL
+###   @9=NULL
+###   @10=NULL
+###   @11=NULL
+###   @12=1759940922
+# at 850
+#251009  0:28:42 server id 1  end_log_pos 881 CRC32 0xf11d6f94  Xid = 1381
+COMMIT/*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+root@b5bc2ea3fb2c:/var/lib/mysql# 
+```
+可以看到我们刚刚进行了，insert操作和update操作，这些都是伪sql
+
+前面的命令同时显示binlog格式的语句，使用如下命令不显示它
+`mysqlbinlog -v --base64-output=DECODE-ROWS`
+```bash
+root@b5bc2ea3fb2c:/var/lib/mysql# mysqlbinlog -v --base64-output=DECODE-ROWS  "/var/lib/mysql/atguigu-bin.000001"
+# The proper term is pseudo_replica_mode, but we use this compatibility alias
+# to make the statement usable on server versions 8.0.24 and older.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 4
+#251008 23:58:55 server id 1  end_log_pos 125 CRC32 0x61e1c329  Start: binlog v 4, server v 8.0.27 created 251008 23:58:55 at startup
+# Warning: this binlog is either in use or was not closed properly.
+ROLLBACK/*!*/;
+# at 125
+#251008 23:58:55 server id 1  end_log_pos 156 CRC32 0xaf26c362  Previous-GTIDs
+# [empty]
+# at 156
+#251009  0:28:19 server id 1  end_log_pos 235 CRC32 0x603ebf33  Anonymous_GTID  last_committed=0        sequence_number=1     rbr_only=yes    original_committed_timestamp=1759940899272405   immediate_commit_timestamp=1759940899272405  transaction_length=339
+/*!50718 SET TRANSACTION ISOLATION LEVEL READ COMMITTED*//*!*/;
+# original_commit_timestamp=1759940899272405 (2025-10-09 00:28:19.272405 CST)
+# immediate_commit_timestamp=1759940899272405 (2025-10-09 00:28:19.272405 CST)
+/*!80001 SET @@session.original_commit_timestamp=1759940899272405*//*!*/;
+/*!80014 SET @@session.original_server_version=80027*//*!*/;
+/*!80014 SET @@session.immediate_server_version=80027*//*!*/;
+SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+# at 235
+#251009  0:28:19 server id 1  end_log_pos 322 CRC32 0x2e028b2c  Query   thread_id=12    exec_time=0     error_code=0
+SET TIMESTAMP=1759940899/*!*/;
+SET @@session.pseudo_thread_id=12/*!*/;
+SET @@session.foreign_key_checks=1, @@session.sql_auto_is_null=0, @@session.unique_checks=1, @@session.autocommit=1/*!*/;
+SET @@session.sql_mode=1168113696/*!*/;
+SET @@session.auto_increment_increment=1, @@session.auto_increment_offset=1/*!*/;
+/*!\C utf8mb4 *//*!*/;
+SET @@session.character_set_client=255,@@session.collation_connection=255,@@session.collation_server=224/*!*/;
+SET @@session.time_zone='SYSTEM'/*!*/;
+SET @@session.lc_time_names=0/*!*/;
+SET @@session.collation_database=DEFAULT/*!*/;
+/*!80011 SET @@session.default_collation_for_utf8mb4=255*//*!*/;
+BEGIN
+/*!*/;
+# at 322
+#251009  0:28:19 server id 1  end_log_pos 396 CRC32 0x1a3d78f4  Table_map: `hm-trade`.`order` mapped to number 98
+# at 396
+#251009  0:28:19 server id 1  end_log_pos 464 CRC32 0x64ee3309  Write_rows: table id 98 flags: STMT_END_F
+### INSERT INTO `hm-trade`.`order`
+### SET
+###   @1=2000000000000000001
+###   @2=88800
+###   @3=2
+###   @4=3
+###   @5=1
+###   @6=1759940899
+###   @7=NULL
+###   @8=NULL
+###   @9=NULL
+###   @10=NULL
+###   @11=NULL
+###   @12=1759940899
+# at 464
+#251009  0:28:19 server id 1  end_log_pos 495 CRC32 0x67f243ac  Xid = 1357
+COMMIT/*!*/;
+# at 495
+#251009  0:28:42 server id 1  end_log_pos 574 CRC32 0xe1964ead  Anonymous_GTID  last_committed=1        sequence_number=2     rbr_only=yes    original_committed_timestamp=1759940922068152   immediate_commit_timestamp=1759940922068152  transaction_length=386
+/*!50718 SET TRANSACTION ISOLATION LEVEL READ COMMITTED*//*!*/;
+# original_commit_timestamp=1759940922068152 (2025-10-09 00:28:42.068152 CST)
+# immediate_commit_timestamp=1759940922068152 (2025-10-09 00:28:42.068152 CST)
+/*!80001 SET @@session.original_commit_timestamp=1759940922068152*//*!*/;
+/*!80014 SET @@session.original_server_version=80027*//*!*/;
+/*!80014 SET @@session.immediate_server_version=80027*//*!*/;
+SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+# at 574
+#251009  0:28:42 server id 1  end_log_pos 670 CRC32 0xdfe894fe  Query   thread_id=12    exec_time=0     error_code=0
+SET TIMESTAMP=1759940922/*!*/;
+BEGIN
+/*!*/;
+# at 670
+#251009  0:28:42 server id 1  end_log_pos 744 CRC32 0x0860a7dd  Table_map: `hm-trade`.`order` mapped to number 98
+# at 744
+#251009  0:28:42 server id 1  end_log_pos 850 CRC32 0x81c6dd08  Update_rows: table id 98 flags: STMT_END_F
+### UPDATE `hm-trade`.`order`
+### WHERE
+###   @1=2000000000000000001
+###   @2=88800
+###   @3=2
+###   @4=3
+###   @5=1
+###   @6=1759940899
+###   @7=NULL
+###   @8=NULL
+###   @9=NULL
+###   @10=NULL
+###   @11=NULL
+###   @12=1759940899
+### SET
+###   @1=2000000000000000001
+###   @2=88800
+###   @3=2
+###   @4=3
+###   @5=2
+###   @6=1759940899
+###   @7=1759940922
+###   @8=NULL
+###   @9=NULL
+###   @10=NULL
+###   @11=NULL
+###   @12=1759940922
+# at 850
+#251009  0:28:42 server id 1  end_log_pos 881 CRC32 0xf11d6f94  Xid = 1381
+COMMIT/*!*/;
+SET @@SESSION.GTID_NEXT= 'AUTOMATIC' /* added by mysqlbinlog */ /*!*/;
+DELIMITER ;
+# End of log file
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
+root@b5bc2ea3fb2c:/var/lib/mysql# 
+```
+
+关于mysqlbinlog工具的使用技巧还有很多，例如只解析对某个库的操作或者某个时间段内的操作等。简单分享几个常用的语句，更多操作可以参考官方文档。
+```bash
+# 可查看参数帮助
+mysqlbinlog --no-defaults --help
+# 查看最后100行
+mysqlbinlog --no-defaults --base64-output=decode-rows -vv atguigu-bin.000002 |tail
+-100
+# 根据position查找
+mysqlbinlog --no-defaults --base64-output=decode-rows -vv atguigu-bin.000002 |grep -A
+20 '4939002'
+```
+上面这种办法读取出binlog日志的全文内容比较多，不容易分辨查看到pos点信息，下面介绍一种更为方便的查询命令：
+```bash
+mysql> show binlog events [IN 'log_name'] [FROM pos] [LIMIT [offset,] row_count];
+```
+- `IN 'log_name'` ：指定要查询的binlog文件名（不指定就是第一个binlog文件）
+- `FROM pos` ：指定从哪个pos起始点开始查起（不指定就是从整个文件首个pos点开始算）
+- `LIMIT [offset]` ：偏移量(不指定就是0)
+- `row_count` :查询总条数（不指定就是所有行）
+
+:::tip
+show binlog events该指令是在mysql下跑的
+
+而mysqlbinlog是在宿主机跑的
+
+:::
+
+```bash
+mysql> SHOW BINARY LOGS;
++--------------------+-----------+-----------+
+| Log_name           | File_size | Encrypted |
++--------------------+-----------+-----------+
+| atguigu-bin.000001 |       881 | No        |
++--------------------+-----------+-----------+
+1 row in set (0.00 sec)
+
+mysql> SHOW BINLOG EVENTS IN 'atguigu-bin.000001';
++--------------------+-----+----------------+-----------+-------------+--------------------------------------+
+| Log_name           | Pos | Event_type     | Server_id | End_log_pos | Info                                 |
++--------------------+-----+----------------+-----------+-------------+--------------------------------------+
+| atguigu-bin.000001 |   4 | Format_desc    |         1 |         125 | Server ver: 8.0.27, Binlog ver: 4    |
+| atguigu-bin.000001 | 125 | Previous_gtids |         1 |         156 |                                      |
+| atguigu-bin.000001 | 156 | Anonymous_Gtid |         1 |         235 | SET @@SESSION.GTID_NEXT= 'ANONYMOUS' |
+| atguigu-bin.000001 | 235 | Query          |         1 |         322 | BEGIN                                |
+| atguigu-bin.000001 | 322 | Table_map      |         1 |         396 | table_id: 98 (hm-trade.order)        |
+| atguigu-bin.000001 | 396 | Write_rows     |         1 |         464 | table_id: 98 flags: STMT_END_F       |
+| atguigu-bin.000001 | 464 | Xid            |         1 |         495 | COMMIT /* xid=1357 */                |
+| atguigu-bin.000001 | 495 | Anonymous_Gtid |         1 |         574 | SET @@SESSION.GTID_NEXT= 'ANONYMOUS' |
+| atguigu-bin.000001 | 574 | Query          |         1 |         670 | BEGIN                                |
+| atguigu-bin.000001 | 670 | Table_map      |         1 |         744 | table_id: 98 (hm-trade.order)        |
+| atguigu-bin.000001 | 744 | Update_rows    |         1 |         850 | table_id: 98 flags: STMT_END_F       |
+| atguigu-bin.000001 | 850 | Xid            |         1 |         881 | COMMIT /* xid=1381 */                |
++--------------------+-----+----------------+-----------+-------------+--------------------------------------+
+12 rows in set (0.01 sec)
+
+mysql> SHOW BINLOG EVENTS IN 'atguigu-bin.000001' from 235 limit 0,1;
++--------------------+-----+------------+-----------+-------------+-------+
+| Log_name           | Pos | Event_type | Server_id | End_log_pos | Info  |
++--------------------+-----+------------+-----------+-------------+-------+
+| atguigu-bin.000001 | 235 | Query      |         1 |         322 | BEGIN |
++--------------------+-----+------------+-----------+-------------+-------+
+1 row in set (0.00 sec)
+
+mysql> SHOW BINLOG EVENTS IN 'atguigu-bin.000001' from 235 limit 0,2;
++--------------------+-----+------------+-----------+-------------+-------------------------------+
+| Log_name           | Pos | Event_type | Server_id | End_log_pos | Info                          |
++--------------------+-----+------------+-----------+-------------+-------------------------------+
+| atguigu-bin.000001 | 235 | Query      |         1 |         322 | BEGIN                         |
+| atguigu-bin.000001 | 322 | Table_map  |         1 |         396 | table_id: 98 (hm-trade.order) |
++--------------------+-----+------------+-----------+-------------+-------------------------------+
+2 rows in set (0.00 sec)
+
+mysql> 
+```
+上面这条语句可以将指定的binlog日志文件，分成有效事件行的方式返回，并可使用limit指定pos点的起始偏移，查询条数。其它举例：
+```bash
+#a、查询第一个最早的binlog日志：
+show binlog events\G;
+#b、指定查询mysql-bin.000002这个文件
+show binlog events in 'atguigu-bin.000002'\G;
+#c、指定查询mysql-bin.000002这个文件，从pos点:391开始查起：
+show binlog events in 'atguigu-bin.000002' from 391\G;
+#d、指定查询mysql-bin.000002这个文件，从pos点:391开始查起，查询5条（即5条语句）
+show binlog events in 'atguigu-bin.000002' from 391 limit 5\G;
+#e、指定查询 mysql-bin.000002这个文件，从pos点:391开始查起，偏移2行（即中间跳过2个）查询5条（即5条语句）。
+show binlog events in 'atguigu-bin.000002' from 391 limit 2,5\G;
+```
+
+上面我们讲了这么多都是基于binlog的默认格式，binlog格式查看
+```bash
+mysql> show variables like 'binlog_format';
++---------------+-------+
+| Variable_name | Value |
++---------------+-------+
+| binlog_format | ROW   |
++---------------+-------+
+1 行于数据集 (0.02 秒)
+```
+
+除此之外，binlog还有2种格式，分别是 Statement 和 Mixed
+- Statement
+每一条会修改数据的sql都会记录在binlog中。
+优点：不需要记录每一行的变化，减少了binlog日志量，节约了IO，提高性能。
+- Row
+5.1.5版本的MySQL才开始支持row level 的复制，它不记录sql语句上下文相关信息，仅保存哪条记录被修改。
+优点：row level 的日志内容会非常清楚的记录下每一行数据修改的细节。而且不会出现某些特定情况下 的存储过程，或function，以及trigger的调用和触发无法被正确复制的问题。
+- Mixed
+从5.1.8版本开始，MySQL提供了Mixed格式，实际上就是Statement与Row的结合。
+
+:::info
+Statement是在binlog中把每一个有变更的sql都记录下来，只记录变更的sql
+
+Row记录的是，比如一个update的sql，Statement记录的是update语句，而Row会记录这个10条语句都改了什么(假如修改了10条记录)；
+:::
+
+
+### 使用日志恢复数据
+
+
+### 删除二进制日志
+
+
+### 其他场景

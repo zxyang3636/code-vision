@@ -1,7 +1,5 @@
 ---
 title: 效率开发
-# date: 2025-07-22
-# updated: 2025-07-22
 categories: 分享
 tags:
   - 工具
@@ -42,7 +40,6 @@ top: 1
 
   | 工具名称 | 核心功能 | 访问/下载 |
   | :--- | :--- | :--- |
-  | **Windows Cleaner** | 专治C盘爆红及各种不服！ | [🔗 官网](https://github.com/darkmatter2048/WindowsCleaner) |
   | **Windhawk** | 针对windows定制的插件 | [🔗 官网](https://windhawk.net/) |
   | **Kite 待办** | 极简主义的待办应用 | [🔗 官网](https://kite.kitlib.cn/) |
   | **Optimizer** | 最好的Windows优化器(禁用更新等) | [🔗 官网](https://github.com/hellzerg/optimizer) |
@@ -74,13 +71,20 @@ top: 1
 
 <br>
 
+**好文推荐**
+
+[产品需求文档写作指南](https://www.wolai.com/hjTNCjSczr8VbMsoqA76ED)
+
+[最通俗易懂的 HashMap 源码分析解读](https://mp.weixin.qq.com/s/q-rWq79HmzPe08gyfOjaIA)
+
+[技术摘抄](https://learn.lianglianglee.com/)
+
 <details>
   <summary><strong>🏞️</strong></summary>
   <br>
 
   | 工具名称 | 核心功能 | 访问/下载 |
   | :--- | :--- | :--- |
-  | **夸父资源社** | 优质夸克网盘资源分享社区 | [🔗 官网](https://www.kuafuzys.com/) |
   | **柳橙昔网址导航** | 实用的导航站 | [🔗 官网](https://nav.yiov.top/) |
   | **阿虚同学的储物间** | 一个储物间 | [🔗 官网](https://axutongxue.com/) |
 

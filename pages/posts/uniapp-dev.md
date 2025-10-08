@@ -1,5 +1,6 @@
 ---
 title: uni-app
+hide: true
 categories: 小程序
 tags:
   - 小程序
@@ -61,7 +62,7 @@ pages中的默认的path就是我们初始化项目的index页面；
 
 不加该属性的话，我们点击子元素，父元素的事件也会触发；
 
-::: tip 
+::: tip
 布尔属性的话，我们可以直接写属性，不用加值
 ```vue
 		<view class="innner" hover-class="innnerHover" hover-stop-propagation>

@@ -1114,6 +1114,83 @@ Row记录的是，比如一个update的sql，Statement记录的是update语句�
 
 ### 使用日志恢复数据
 
+如果MySQL服务器启用了二进制日志，在数据库出现意外丢失数据时，可以使用MySQLbinlog工具从指定的时间点开始（例如，最后一次备份）直到现在或另一个指定的时间点的日志中回复数据。
+
+mysqlbinlog恢复数据的语法如下：
+
+```bash
+mysqlbinlog [option] filename|mysql –uuser -ppass;
+```
+这个命令可以这样理解：使用mysqlbinlog命令来读取filename中的内容，然后使用mysql命令将这些内容恢复到数据库中。
+
+- `filename`：是日志文件名。
+- `option`：可选项，比较重要的两对 option 参数是 --start-date、--stop-date 和 --start-position、--stop-position。
+  - `--start-date` 和 `--stop-date`：可以指定恢复数据库的起始时间点和结束时间点。
+  - `--start-position` 和 `--stop-position`：可以指定恢复数据的开始位置和结束位置。
+
+>注意：使用mysqlbinlog命令进行恢复操作时，必须是编号小的先恢复，例如atguigu - bin.000001必须在atguigu - bin.000002之前恢复。
+
+使用示例
+```bash
+docker exec -it mysql bash
+
+mysql -uroot -p
+
+# 查看二进制日志
+show variables like '%log_bin%';
+
+# 服务器当前存在的所有二进制日志文件（binlog）
+show binary logs;
+
+# 在一张表中做增删改操作，然后将所有数据都delete掉
+mysql> delete from pay_order where id > 10;
+Query OK, 9 rows affected (0.02 sec)
+
+mysql> select * from pay_order;
+Empty set (0.00 sec)
+
+# 生成新的binlog文件，与之前旧的binlog文件分隔开
+flush logs;
+
+show binary logs;
+
+
+# 退出mysql
+\q
+
+# linux客户端使用该命令（恢复一条插入的数据）
+/usr/bin/mysqlbinlog --start-position=235 --stop-position=594 --database=hm-pay /var/lib/mysql/atguigu-bin.000002 | /usr/bin/mysql -uroot -p123 -v hm-pay
+
+# -v 以及 --database 后面跟的是数据库名称
+```
+
+恢复后我们可以查看最终结果和删除数据之前的结果一样，利用 binlog 实现了数据恢复。
+
+当然也可以使用日期恢复，命令格式如下：
+```bash
+/usr/bin/mysqlbinlog --start-datetime="2022-01-05 15:39:22" --stop-datetime="2022-01-05 15:40:19" --database=atguigu14 /var/lib/mysql/binlog/atguigu-bin.000005 | /usr/bin/mysql -uroot -pabc123 -v atguigu14
+
+# 查看时间的话我们可以在mysql中使用：
+mysqlbinlog '/var/lib/mysql/atgJigu-bin.000002';
+
+# 可以看到里面有TIMESTAMP,可以转为yyyy-mm-dd hh:mm:ss格式
+```
+
+日期可以根据binlog日志详情查看。可能出现一个事务执行时间过短，那么就是同样的时间，一秒内执行完成，此时我们找到下一个事务的开始时间即可，多计算一些时间就可以了。本次事务的开始时间是220105 15:39:22，结束时间设置为220105 15:40:19。
+
+
+
+**偏移量的计算方法：**
+```bash
+show binary logs;
+
+show binlog events in 'atguigu-bin.000002';
+
+# 根据xid去找最近的一个BEGIN，就是一条语句执行的其实与结束位置
+```
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-20_23-54-10.png)
+
+>log_bin 是否开启了二进制日志功能
 
 ### 删除二进制日志
 

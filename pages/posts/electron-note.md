@@ -1,5 +1,5 @@
 ---
-title: Electron 基础
+title: Electron
 categories: 前端
 tags:
   - Electron
@@ -887,8 +887,68 @@ src下创建views文件夹，再创建`Home.vue`
 
 
 
+### 应用更新
 
+**electron 应用更新-基于github**
 
+生成github token：  https://github.com/settings/tokens/new
 
+修改配置文件`package.json`
 
+主要是`build`和`release`命令
+```json
+{
+  "name": "electron_test",
+  "version": "1.0.7",
+  "main": "main.js",
+  "scripts": {
+    "start": "nodemon --exec electron .",
+    "build": "electron-builder",
+    "release": "electron-builder  --win -p always"
+  },
+  "build": {
+    "appId": "com.zzyang.video",
+    "publish": {
+      "provider": "github",
+      "token": "你的token",
+      "owner": "zxyang3636",
+      "private": true,
+      "releaseType": "release",
+      "repo": "electron_test"
+    },
+    "win": {
+      "icon": "./logo.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "author": "zzy",
+  "license": "ISC",
+  "description": "this is a electron demo",
+  "devDependencies": {
+    "electron": "^38.1.0",
+    "electron-builder": "^26.0.12",
+    "nodemon": "^3.1.10"
+  },
+  "dependencies": {
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.6.2"
+  }
+}
 
+```
+
+> releaseType: // “draft” | “prerelease” | “release” | “undefined” 默认草稿状态
+
+参考：[github](https://github.com/frontierFlight/fe-content-sharing/blob/main/electron/%E5%BA%94%E7%94%A8%E6%9B%B4%E6%96%B0.md)

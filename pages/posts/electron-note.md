@@ -950,5 +950,7 @@ src下创建views文件夹，再创建`Home.vue`
 ```
 
 > releaseType: // “draft” | “prerelease” | “release” | “undefined” 默认草稿状态
+>
+>repo 你的仓库名称
 
 参考：[github](https://github.com/frontierFlight/fe-content-sharing/blob/main/electron/%E5%BA%94%E7%94%A8%E6%9B%B4%E6%96%B0.md)

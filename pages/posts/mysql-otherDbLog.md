@@ -1194,5 +1194,230 @@ show binlog events in 'atguigu-bin.000002';
 
 ### 删除二进制日志
 
+MySQL的二进制文件可以配置自动删除，同时MySQL也提供了安全的手动删除二进制文件的方法。 `PURGE MASTER LOGS` 只删除指定部分的二进制日志文件， `RESET MASTER` 删除所有的二进制日志文件。具体如下：
+
+**1. PURGE MASTER LOGS：删除指定日志文件**
+
+PURGE MASTER LOGS语法如下：
+```bash
+PURGE {MASTER | BINARY} LOGS TO ‘指定日志文件名’
+PURGE {MASTER | BINARY} LOGS BEFORE ‘指定日期’
+```
+
+
+
+
+**使用示例如下：**
+
+```bash
+# 查看当前已有的binlog文件
+show binary logs;
+
+# 为了测试我们可以多执行几次flush logs命令，将所有日志都刷新到磁盘，这样文件能多一些，我们好进行删除操作
+flush logs;
+# 查看当前已有的binlog文件
+
+mysql> show binary logs;
++--------------------+-----------+-----------+
+| Log_name           | File_size | Encrypted |
++--------------------+-----------+-----------+
+| atguigu-bin.000005 |       205 | No        |
+| atguigu-bin.000006 |       205 | No        |
+| atguigu-bin.000007 |       205 | No        |
+| atguigu-bin.000008 |       205 | No        |
+| atguigu-bin.000009 |       205 | No        |
+| atguigu-bin.000010 |       156 | No        |
++--------------------+-----------+-----------+
+6 rows in set (0.00 sec)
+
+
+mysql> purge master logs to 'atguigu-bin.000007';
+Query OK, 0 rows affected (0.00 sec)
+
+mysql> show binary logs;
++--------------------+-----------+-----------+
+| Log_name           | File_size | Encrypted |
++--------------------+-----------+-----------+
+| atguigu-bin.000007 |       205 | No        |
+| atguigu-bin.000008 |       205 | No        |
+| atguigu-bin.000009 |       205 | No        |
+| atguigu-bin.000010 |       156 | No        |
++--------------------+-----------+-----------+
+4 rows in set (0.00 sec)
+
+
+# 比binlog.000007早的所有日志文件都已经被删除了。注意是不包括binlog.000007这个文件。
+```
+
+**举例：** 使用`PURGE MASTER LOGS`语句删除2020年10月25号前创建的所有日志文件。具体步骤如下：
+
+（1）显示二进制日志文件列表
+```bash
+SHOW BINARY LOGS;
+```
+（2）执行mysqlbinlog命令查看二进制日志文件binlog.000005的内容（假设我们想删的是该文件中某个日期之前的binlog日志）
+```bash
+mysqlbinlog --no-defaults "/var/lib/mysql/binlog/atguigu-bin.000005"
+```
+结果可以看出20220105为日志创建的时间，即2022年1月05日。
+
+（3）使用PURGE MASTER LOGS语句删除2022年1月05日前创建的所有日志文件
+```bash
+PURGE MASTER LOGS before "20220105";
+```
+（4）显示二进制日志文件列表
+```bash
+SHOW BINARY LOGS;
+```
+2022年01月05号之前的二进制日志文件都已经被删除，最后一个没有删除，是因为当前在用，还未记录最后的时间，所以未被删除。
+
+**2. RESET MASTER: 删除所有二进制日志文件**
+
+使用 `RESET MASTER` 语句，清空所有的binlog日志。MySQL会重新创建二进制文件，新的日志文件扩展名将重新从000001开始编号。**慎用**！
+
+举例：使用RESET MASTER语句删除所有日志文件。
+
+（1）重启MySQL服务若干次，执行SHOW语句显示二进制日志文件列表。
+```bash
+SHOW BINARY LOGS;
+```
+（2）执行RESET MASTER语句，删除所有日志文件
+```bash
+RESET MASTER;
+```
+执行完该语句后，原来的所有二进制日志已经全部被删除。
+
+
+
+
 
 ### 其他场景
+
+二进制日志可以通过数据库的 `全量备份` 和二进制日志中保存的 `增量信息` ，完成数据库的 无损失恢复。 但是，如果遇到数据量大、数据库和数据表很多（比如分库分表的应用）的场景，用二进制日志进行数据恢复，是很有挑战性的，因为起止位置不容易管理。
+
+在这种情况下，一个有效的解决办法是 `配置主从数据库服务器` ，甚至是 `一主多从` 的架构，把二进制日志文件的内容通过中继日志，同步到从数据库服务器中，这样就可以有效避免数据库故障导致的数据异常等问题。
+
+
+
+## 再谈二进制日志
+
+
+
+### 写入机制
+binlog的写入时机也非常简单，事务执行过程中，先把日志写到 `binlog cache` ，事务提交的时候，再把binlog cache写到binlog文件中。因为一个事务的binlog不能被拆开，无论这个事务多大，也要确保一次性写入，所以系统会给每个线程分配一个块内存作为`binlog cache`。
+
+我们可以通过`binlog_cache_size`参数控制单个线程 `binlog cache` 大小，如果存储内容超过了这个参数，就要暂存到磁盘（Swap）。binlog日志刷盘流程如下：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_21-51-07.png)
+
+>- 上图的write，是指把日志写入到文件系统的page cache，并没有把数据持久化到磁盘，所以速度比较快
+>
+>- 上图的fsync，才是将数据持久化到磁盘的操作
+
+write和fsync的时机，可以由参数 `sync_binlog` 控制，默认是 `0` 。为0的时候，表示每次提交事务都只 write，由系统自行判断什么时候执行 fsync。虽然性能得到提升，但是机器宕机，page cache里面的binglog 会丢失。如下图：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_21-56-29.png)
+
+
+为了安全起见，可以设置为1，表示每次提交事务都会执行fsync，就如同**redo log刷盘流程**一样。
+
+最后还有一种折中方式，可以设置为N(N>1)，表示每次提交事务都write，但累积N个事务后才fsync。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_21-59-31.png)
+
+在出现I0瓶颈的场景里，将sync_binlog设置成一个比较大的值，可以提升性能。同样的，如果机器宕机，会丢失
+最近N个事务的binlog日志。
+
+### binlog与redolog对比
+
+- redo log 它是`物理日志`，记录内容是“在某个数据页上做了什么修改”，属于 InnoDB 存储引擎层产生的。
+- 而 binlog 是`逻辑日志`，记录内容是语句的原始逻辑，类似于“给 ID = 2 这一行的 c 字段加 1”，属于 MySQL Server 层。
+- 虽然它们都属于持久化的保证，但是侧重点不同。
+  - redo log 让 InnoDB 存储引擎拥有了崩溃恢复能力。
+  - binlog 保证了 MySQL 集群架构的数据一致性。
+
+
+### 两阶段提交
+
+在执行更新语句过程，会记录redo log与binlog两块日志，以基本的事务为单位，redo log在事务执行过程中可以不断写入，而binlog只有在提交事务时才写入，所以redo log与binlog的**写入时机**不一样。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_22-03-27.png)
+
+
+**redo log与binlog两份日志之间的逻辑不一致，会出现什么问题?**
+
+以update语句为例，假设id=2的记录，字段c值是0，把字段c值更新成1，SQL语句为update T set c=1 where id=2。
+
+假设执行过程中写完redo log日志后，binlog日志写期间发生了异常，会出现什么情况呢?
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_22-04-48.png)
+
+
+由于binlog没写完就异常，这时候binlog里面没有对应的修改记录。因此，之后用binlog日志恢复数据时，就会少这一次更新，恢复出来的这一行c值是0，而原库因为redo log日志恢复，这一行c值是1，最终数据不一致。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_22-06-52.png)
+
+为了解决两份日志之间的逻辑一致问题， InnoDB存储引擎使用**两阶段提交**方案。原理很简单，将redo log的写入拆成了两个步骤prepare和commit，这就是**两阶段提交**。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_22-08-42.png)
+
+使用**两阶段提交**后，写入binlog时发生异常也不会有影响，因为MySQL根据redo log日志恢复数据时，发现redo log还处于prepare阶段，并且没有对应binlog日志，就会回滚该事务。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_22-09-54.png)
+
+
+
+另一个场景，redo log设置commit阶段发生异常，那会不会回滚事务呢?
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-10-27_22-11-45.png)
+
+并不会回滚事务，它会执行上图框住的逻辑，虽然redolog是处于prepare阶段，但是能通过事务id找到对应的
+binlog日志，所以MySQL认为是完整的，就会提交事务恢复数据。
+
+
+
+## 中继日志(relay log)
+
+
+### 介绍
+
+**中继日志只在主从服务器架构的从服务器上存在**。从服务器为了与主服务器保持一致，要从主服务器读取二进制日志的内容，并且把读取到的信息写入`本地的日志文件`中，这个从服务器本地的日志文件就叫**中继日志**。然后，从服务器读取中继日志，并根据中继日志的内容对从服务器的数据进行更新，完成主从服务器的`数据同步`。
+
+搭建好主从服务器之后，中继日志默认会保存在从服务器的数据目录下。
+
+文件名的格式是：`从服务器名 -relay-bin.序号`。中继日志还有一个索引文件：`从服务器名 -relay-bin.index`，用来定位当前正在使用的中继日志。
+
+
+### 查看中继日志
+中继日志与二进制日志的格式相同，可以用 `mysqlbinlog` 工具进行查看。下面是中继日志的一个片段：
+```bash
+SET TIMESTAMP=1618558728/*!*/;
+BEGIN
+/*!*/;
+# at 950
+#210416 15:38:48 server id 1 end_log_pos 832 CRC32 0xcc16d651 Table_map:
+`atguigu`.`test` mapped to number 91
+# at 1000
+#210416 15:38:48 server id 1 end_log_pos 872 CRC32 0x07e4047c Delete_rows: table id
+91 flags: STMT_END_F -- server id 1 是主服务器，意思是主服务器删了一行数据
+BINLOG '
+CD95YBMBAAAAMgAAAEADAAAAAFsAAAAAAAEABGRlbW8ABHRlc3QAAQMAAQEBAFHWFsw=
+CD95YCABAAAAKAAAAGgDAAAAAFsAAAAAAAEAAgAB/wABAAAAfATkBw==
+'/*!*/;
+# at 1040
+```
+这一段的意思是，主服务器（“server id 1”）对表 atguigu.test 进行了 2 步操作：
+```bash
+定位到表 atguigu.test 编号是 91 的记录，日志位置是 832；
+删除编号是 91 的记录，日志位置是 872
+```
+
+### 恢复的典型错误
+
+如果从服务器宕机，有的时候为了系统恢复，要重装操作系统，这样就可能会导致你的`服务器名称`与之前`不同`。
+而中继日志里是`包含从服务器名`的。在这种情况下，就可能导致你恢复从服务器的时候，无法从宕机前的中继日志里读取数据，以为是日志文件损坏了，其实是名称不对了。
+
+解决的方法也很简单，把从服务器的名称改回之前的名称。
+
+
+

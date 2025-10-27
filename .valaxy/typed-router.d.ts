@@ -43,6 +43,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/mysql-IdxCreateDesgRule': RouteRecordInfo<'/posts/mysql-IdxCreateDesgRule', '/posts/mysql-IdxCreateDesgRule', Record<never, never>, Record<never, never>>,
     '/posts/mysql-IdxDataStruct': RouteRecordInfo<'/posts/mysql-IdxDataStruct', '/posts/mysql-IdxDataStruct', Record<never, never>, Record<never, never>>,
     '/posts/mysql-lock': RouteRecordInfo<'/posts/mysql-lock', '/posts/mysql-lock', Record<never, never>, Record<never, never>>,
+    '/posts/mysql-masterSlave': RouteRecordInfo<'/posts/mysql-masterSlave', '/posts/mysql-masterSlave', Record<never, never>, Record<never, never>>,
     '/posts/mysql-mianshi': RouteRecordInfo<'/posts/mysql-mianshi', '/posts/mysql-mianshi', Record<never, never>, Record<never, never>>,
     '/posts/mysql-mvcc': RouteRecordInfo<'/posts/mysql-mvcc', '/posts/mysql-mvcc', Record<never, never>, Record<never, never>>,
     '/posts/mysql-otherDbLog': RouteRecordInfo<'/posts/mysql-otherDbLog', '/posts/mysql-otherDbLog', Record<never, never>, Record<never, never>>,

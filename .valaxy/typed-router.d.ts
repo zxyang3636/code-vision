@@ -40,6 +40,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/java-monitor': RouteRecordInfo<'/posts/java-monitor', '/posts/java-monitor', Record<never, never>, Record<never, never>>,
     '/posts/java-threadPool': RouteRecordInfo<'/posts/java-threadPool', '/posts/java-threadPool', Record<never, never>, Record<never, never>>,
     '/posts/javase-mianshi': RouteRecordInfo<'/posts/javase-mianshi', '/posts/javase-mianshi', Record<never, never>, Record<never, never>>,
+    '/posts/mysql-backup': RouteRecordInfo<'/posts/mysql-backup', '/posts/mysql-backup', Record<never, never>, Record<never, never>>,
     '/posts/mysql-IdxCreateDesgRule': RouteRecordInfo<'/posts/mysql-IdxCreateDesgRule', '/posts/mysql-IdxCreateDesgRule', Record<never, never>, Record<never, never>>,
     '/posts/mysql-IdxDataStruct': RouteRecordInfo<'/posts/mysql-IdxDataStruct', '/posts/mysql-IdxDataStruct', Record<never, never>, Record<never, never>>,
     '/posts/mysql-lock': RouteRecordInfo<'/posts/mysql-lock', '/posts/mysql-lock', Record<never, never>, Record<never, never>>,

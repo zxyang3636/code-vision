@@ -447,3 +447,263 @@ mysqldump其他常用选项如下：
 :::tip
 提示 如果运行mysqldump没有--quick或--opt选项，mysqldump在转储结果前将整个结果集装入内存。如果转储大数据库可能会出现问题，该选项默认启用，但可以用--skip-opt禁用。如果使用最新版本的mysqldump程序备份数据，并用于恢复到比较旧版本的MySQL服务器中，则不要使用--opt 或-e选项。
 :::
+
+
+## mysql命令恢复数据
+
+使用mysqldump命令将数据库中的数据备份成一个文本文件。需要恢复时，可以使用`mysql命令`来恢复备份的数据。
+
+mysql命令可以执行备份文件中的`CREATE语句`和`INSERT语句`。通过CREATE语句来创建数据库和表。通过INSERT语句来插入备份的数据。
+
+基本语法：
+```bash
+# 这个指令就相当于读取mysqldump生成的sql文件
+mysql -uroot -p [dbname] < backup.sql
+```
+其中，dbname参数表示数据库名称。该参数是可选参数，可以指定数据库名，也可以不指定。指定数据库名时，表示还原该数据库下的表。此时需要确保MySQL服务器中已经创建了该名的数据库。不指定数据库名，表示还原文件中所有的数据库。此时sql文件中包含有CREATE DATABASE语句，不需要MySQL服务器中已存在的这些数据库。
+
+
+
+
+### 单库备份中恢复单库
+使用root用户，将之前练习中备份的atguigu.sql文件中的备份导入数据库中，命令如下：
+
+如果备份文件中包含了创建数据库的语句，则恢复的时候不需要指定数据库名称，如下所示
+```bash
+# 如果已经存在数据库了，使用该命令即可
+mysql -uroot -p < atguigu.sql
+```
+否则需要指定数据库名称，如下所示
+```bash
+# 如果还没有数据库，使用该命令
+mysql -uroot -p atguigu4 < atguigu.sql
+```
+
+
+### 全量备份恢复
+如果我们现在有昨天的全量备份，现在想整个恢复，则可以这样操作：
+
+
+```bash
+mysql –u root –p < all.sql
+
+```
+执行完后，MySQL数据库中就已经恢复了all.sql文件中的所有数据库。
+
+:::tip
+补充:
+
+如果使用`--all-databases`参数备份了所有的数据库，那么恢复时不需要指定数据库。对应的sql文件包含有
+CREATE DATABASE语句，可通过该语句创建数据库。创建数据库后，可以执行sql文件中的USE语句选择数据库，再创建表并插入记录。
+:::
+
+### 从全量备份中恢复单库
+
+可能有这样的需求，比如说我们只想恢复某一个库，但是我们有的是整个实例的备份，这个时候我们可以从全量备份中分离出单个库的备份。
+
+举例：
+
+```bash
+# 表示从all_database.sql文件中分离出atguigu库的备份，并保存到atguigu.sql文件中
+sed -n '/^-- Current Database: `atguigu`/,/^-- Current Database: `/p' all_database.sql > atguigu.sql
+# 分离完成后我们再导入atguigu.sql即可恢复单个库
+mysql -uroot -p < atguigu.sql
+```
+> 如果没有看到恢复的数据库或者数据，我们需要重新登录`mysql -uroot -p`
+
+
+
+### 从单库备份中恢复单表
+
+这个需求还是比较常见的。比如说我们知道哪个表误操作了，那么就可以用单表恢复的方式来恢复。
+
+举例：我们有atguigu整库的备份，但是由于class表误操作，需要单独恢复出这张表。
+
+```bash
+# 把atguigu.sql数据库文件中的class表的CREATE语句(表结构)分离出来，保存到class_structure.sql文件中
+cat atguigu.sql | sed -e '/./{H;$!d;}' -e 'x;/CREATE TABLE `class`/!d;q' > class_structure.sql
+# 把atguigu.sql数据库文件中的class表的insert语句(表数据)分离出来，保存到class_data.sql文件中
+cat atguigu.sql | grep --ignore-case 'insert into `class`' > class_data.sql
+#用shell语法分离出创建表的语句及插入数据的语句后 再依次导出即可完成恢复
+
+use atguigu;
+mysql> source class_structure.sql;
+# 或
+mysql> source /var/lib/mysql/backup/class_structure.sql
+Query OK, 0 rows affected, 1 warning (0.00 sec)
+
+mysql> source class_data.sql;
+Query OK, 1 row affected (0.01 sec)
+```
+
+
+## 物理备份：直接复制整个数据库
+
+直接将MySQL中的数据库文件复制出来。这种方法最简单，速度也最快。MySQL的数据库目录位置不一 定相同：
+- 在Windows平台下，MySQL 8.0存放数据库的目录通常默认为 “` C:\ProgramData\MySQL\MySQL Server 8.0\Data `”或者其他用户自定义目录；
+- 在Linux平台下，数据库目录位置通常为`/var/lib/mysql/`；
+- 在MAC OSX平台下，数据库目录位置通常为“`/usr/local/mysql/data`”
+
+但为了保证备份的一致性。需要保证：
+- 方式1：备份前，将服务器停止。
+- 方式2：备份前，对相关表执行 `FLUSH TABLES WITH READ LOCK` 操作。这样当复制数据库目录中 的文件时，允许其他客户继续查询表。同时，FLUSH TABLES语句来确保开始备份前将所有激活的索 引页写入硬盘。
+
+这种方式方便、快速，但不是最好的备份方法，因为实际情况可能 不允许停止MySQL服务器 或者 锁住表 ，而且这种方法 **对InnoDB存储引擎的表不适用**。对于MyISAM存储引擎的表，这样备份和还原很方便，但是还原时最好是相同版本的MySQL数据库，否则可能会存在文件类型不同的情况。
+
+注意，物理备份完毕后，执行 UNLOCK TABLES 来结算其他客户对表的修改行为。
+
+>说明： 在MySQL版本号中，第一个数字表示主版本号，主版本号相同的MySQL数据库文件格式相同。
+
+此外，还可以考虑使用相关工具实现备份。比如， `MySQLhotcopy` 工具。MySQLhotcopy是一个Perl脚本，它使用LOCK TABLES、FLUSH TABLES和cp或scp来快速备份数据库。它是备份数据库或单个表最快的途径，但它只能运行在数据库目录所在的机器上，并且只能备份MyISAM类型的表。多用于mysql5.5之前。
+
+## 物理备份：直接复制到数据库目录
+
+步骤:
+1) 演示删除备份的数据库中指定表的数据
+2) 将备份的数据库数据拷贝到数据目录下,并重启MySQL服务器
+3) 查询相关表的数据是否恢复。需要使用下面的 chown 操作。
+
+要求:
+- 必须确保备份数据的数据库和待恢复的数据库服务器的主版本号相同。
+- 因为只有MySQL数据库主版本号相同时,才能保证这两个MySQL数据库文件类型是相同的。
+- 这种方式对 MyISAM类型的表比较有效 ,*对于InnoDB类型的表则不可用*。
+- 因为InnoDB表的表空间不能直接复制。
+- 在Linux操作系统下,复制到数据库目录后,一定要将数据库的用户和组变成mysql,命令如下:
+```bash
+chown -R mysql.mysql /var/lib/mysql/dbname
+```
+其中，两个mysql分别表示组和用户；“-R”参数可以改变文件夹下的所有子文件的用户和组；“dbname”参数表示数据库目录。
+
+:::info
+提示 Linux操作系统下的权限设置非常严格。通常情况下，MySQL数据库只有root用户和mysql用户 组下的mysql用户才可以访问，因此将数据库目录复制到指定文件夹后，一定要使用chown命令将 文件夹的用户组变为mysql，将用户变为mysql。
+:::
+
+**物理备份步骤**
+```sql
+mysql> create database atguigudb5;
+Query OK, 1 row affected (0.01 sec)
+
+mysql> use atguigudb5;
+Database changed
+mysql> create table test1(id int)engine=myisam;
+Query OK, 0 rows affected (0.01 sec)
+
+mysql> insert into test1 values(1),(2),(3);
+Query OK, 3 rows affected (0.00 sec)
+Records: 3  Duplicates: 0  Warnings: 0
+
+mysql> select * from test1;
++----+
+| id |
++----+
+|  1 |
+|  2 |
+|  3 |
++----+
+3 rows in set (0.00 sec)
+
+mysql> flush tables with read lock;
+Query OK, 0 rows affected (0.00 sec)
+
+-- 此时不可以删除，防止备份之前表数据的不一致性
+mysql> delte from test1;
+ERROR 1223 (HY000): Can't execute the query because you have a conflicting read lock
+
+```
+
+在mysql外部操作
+```bash
+# 在mysql目录下 var/lib/mysql/ 进行复制
+cp -r atguigudb5 ./backup/
+
+```
+
+进入mysql中
+```bash
+mysql> unlock tables;
+Query OK, 0 rows affected (0.00 sec)
+```
+
+至此备份就完成了；
+
+
+
+**恢复数据**
+```bash
+# 模拟数据损毁了
+mysql> delete from test1;
+Query OK, 3 rows affected (0.00 sec)
+
+mysql> select * from test1;
+Empty set (0.00 sec)
+
+mysql>
+```
+
+进入到mysql目录下
+```bash
+# 模拟真实删除
+rm -rf atguigudb5
+# 从备份的文件中移动到数据库目录下
+mv  ./backup/atguigudb5 ./
+
+# 重启mysql服务器
+systemctl restart mysqld
+```
+
+重新进入mysql
+```bash
+mysql> select * from test1;
+ERROR 2013 (HY000): Lost connection to MySQL server during query
+No connection. Trying to reconnect...
+Connection id:    8
+Current database: atguigudb5
+
+ERROR 1036 (HY000): Table 'test1' is read only
+mysql> quit
+Bye
+[root@atguigu05 ~]# mysql -uroot -p
+Enter password: 
+Welcome to the MySQL monitor.  Commands end with ; or \g.
+Your MySQL connection id is 9
+Server version: 8.0.25 MySQL Community Server - GPL
+
+Copyright (c) 2000, 2021, Oracle and/or its affiliates.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+mysql> use atguigudb5;
+Reading table information for completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Database changed
+
+mysql> select * from test1;
+ERROR 1036 (HY000): Table 'test1' is read only # 这里是说权限是不够的
+
+
+```
+
+在linux下执行
+```bash
+# 因为这个文件目录不是之前那个了，这是新的文件目录，这个目录必须要让mysql的用户有权限访问
+chown -R mysql.mysql /var/lib/mysql/atguigudb5
+
+# 此时再回到mysql中就能执行了
+mysql> select * from test1;
++----+
+| id |
++----+  
+|  1 |
+|  2 |
+|  3 |
++----+
+3 rows in set (0.01 sec)
+
+```
+
+物理层面的恢复就完成了。

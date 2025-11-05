@@ -707,3 +707,499 @@ mysql> select * from test1;
 ```
 
 物理层面的恢复就完成了。
+
+## 表的导出与导入
+
+
+
+### 表的导出
+
+
+
+
+#### 使用select...into outfile导出文本文件
+
+在MySQL中，可以使用SELECT…INTO OUTFILE语句将表的内容导出成一个文本文件。
+
+**举例：** 使用SELECT…INTO OUTFILE将atguigu数据库中account表中的记录导出到文本文件。
+
+（1）选择数据库atguigu，并查询account表，执行结果如下所示。
+
+```sql
+use atguigu;
+select * from account;
+mysql> select * from account;
++----+--------+---------+
+| id | name | balance |
++----+--------+---------+
+| 1 | 张三 | 90 |
+| 2 | 李四 | 100 |
+| 3 | 王五 | 0 |
++----+--------+---------+
+3 rows in set (0.01 sec)
+```
+
+（2）mysql默认对导出的目录有权限限制，也就是说使用命令行进行导出的时候，需要指定目录进行操作。
+
+查询secure_file_priv值：
+
+```bash
+mysql> SHOW GLOBAL VARIABLES LIKE '%secure%';
++--------------------------+-----------------------+
+| Variable_name            | Value                 |
++--------------------------+-----------------------+
+| require_secure_transport | OFF                   |
+| secure_file_priv         | /var/lib/mysql-files/ |
++--------------------------+-----------------------+
+2 rows in set (0.02 sec)
+```
+参数`secure_file_priv`的可选值和作用分别是:
+- 如果设置为`empty`，表示不限制文件生成的位置，这是不安全的设置;
+- 如果设置为一个表示路径的字符串，就要求生成的文件只能放在这个指定的目录，或者它的子目录;
+- 如果设置为`NULL`，就表示禁止在这个MySQL实例上执行`select...into outfile`操作。
+
+（3）上面结果中显示，secure_file_priv变量的值为/var/lib/mysql-files/，导出目录设置为该目录，SQL语句如下。
+
+```sql
+SELECT * FROM account INTO OUTFILE "/var/lib/mysql-files/account.txt";
+```
+
+（4）查看 `/var/lib/mysql-files/account.txt`文件。
+
+这里就是实实在在的数据，表结构是没有的
+```bash
+cat /var/lib/mysql-files/account.txt
+
+1 张三 90
+2 李四 100
+3 王五 0
+```
+
+
+#### 使用mysqldump命令导出文本文件
+
+**举例1：** 使用mysqldump命令将将atguigu数据库中account表中的记录导出到文本文件：
+```bash
+mysqldump -uroot -p -T "/var/lib/mysql-files/" atguigu account
+```
+mysqldump命令执行完毕后，在指定的目录/var/lib/mysql-files/下生成了account.sql和account.txt文件。
+
+打开account.sql文件，其内容包含创建account表的CREATE语句。
+
+```sql
+[root@node1 mysql-files]# cat account.sql
+-- MySQL dump 10.13 Distrib 8.0.26, for Linux (x86_64)
+--
+-- Host: localhost Database: atguigu
+-- ------------------------------------------------------
+-- Server version 8.0.26
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!50503 SET NAMES utf8mb4 */;
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='' */;
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
+--
+-- Table structure for table `account`
+--
+
+DROP TABLE IF EXISTS `account`;
+/*!40101 SET @saved_cs_client = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `account` (
+`id` int NOT NULL AUTO_INCREMENT,
+`name` varchar(255) NOT NULL,
+`balance` int NOT NULL,
+PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb3;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
+
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+
+-- Dump completed on 2022-01-07 23:19:27
+```
+打开account.txt文件，其内容只包含account表中的数据。
+```bash
+[root@node1 mysql-files]# cat account.txt
+1 张三 90
+2 李四 100
+3 王五 0
+```
+
+**举例2：** 使用mysqldump将atguigu数据库中的account表导出到文本文件，使用FIELDS选项，要求字段之间使用逗号“，”间隔，所有字符类型字段值用双引号括起来：
+
+```bash
+mysqldump -uroot -p -T "/var/lib/mysql-files/" atguigu account --fields-terminated-by=',' --fields-optionally-enclosed-by='\"'
+```
+语句mysqldump语句执行成功之后，指定目录下会出现两个文件account.sql和account.txt。
+
+打开account.sql文件，其内容包含创建account表的CREATE语句。
+```sql
+[root@node1 mysql-files]# cat account.sql
+-- MySQL dump 10.13 Distrib 8.0.26, for Linux (x86_64)
+--
+-- Host: localhost Database: atguigu
+-- ------------------------------------------------------
+-- Server version 8.0.26
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!50503 SET NAMES utf8mb4 */;
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='' */;
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+--
+-- Table structure for table `account`
+--
+DROP TABLE IF EXISTS `account`;
+/*!40101 SET @saved_cs_client = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `account` (
+`id` int NOT NULL AUTO_INCREMENT,
+`name` varchar(255) NOT NULL,
+`balance` int NOT NULL,
+PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb3;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+-- Dump completed on 2022-01-07 23:36:39
+```
+打开account.txt文件，其内容包含创建account表的数据。从文件中可以看出，字段之间用逗号隔开，字 符类型的值被双引号括起来。
+
+```bash
+[root@node1 mysql-files]# cat account.txt
+1,"张三",90
+2,"李四",100
+3,"王五",0
+```
+
+
+#### 使用mysql命令导出文本文件
+
+**举例1：** 使用mysql语句导出atguigu数据中account表中的记录到文本文件：
+```bash
+mysql -uroot -p --execute="SELECT * FROM account;" atguigu> "/var/lib/mysql-files/account.txt"
+```
+打开account.txt文件，其内容包含创建account表的数据。
+```bash
+[root@node1 mysql-files]# cat account.txt
+id name balance
+1 张三 90
+2 李四 100
+3 王五 0
+```
+
+**举例2：** 将atguigu数据库account表中的记录导出到文本文件，使用--veritcal参数将该条件记录分为多行显示：
+```bash
+mysql -uroot -p --vertical --execute="SELECT * FROM account;" atguigu > "/var/lib/mysql-files/account_1.txt"
+```
+打开account_1.txt文件，其内容包含创建account表的数据。
+```bash
+[root@node1 mysql-files]# cat account_1.txt
+*************************** 1. row ***************************
+id: 1
+name: 张三
+balance: 90
+*************************** 2. row ***************************
+id: 2
+name: 李四
+balance: 100
+*************************** 3. row ***************************
+id: 3
+name: 王五
+balance: 0
+```
+
+**举例3：** 将atguigu数据库account表中的记录导出到xml文件，使用--xml参数，具体语句如下。
+```bash
+mysql -uroot -p --xml --execute="SELECT * FROM account;" atguigu>"/var/lib/mysql-files/account_3.xml"
+```
+```bash
+[root@node1 mysql-files]# cat account_3.xml
+<?xml version="1.0"?>
+<resultset statement="SELECT * FROM account"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<row>
+    <field name="id">1</field>
+    <field name="name">张三</field>
+    <field name="balance">90</field>
+</row>
+<row>
+    <field name="id">2</field>
+    <field name="name">李四</field>
+    <field name="balance">100</field>
+</row>
+<row>
+    <field name="id">3</field>
+    <field name="name">王五</field>
+    <field name="balance">0</field>
+</row>
+</resultset>
+```
+
+>说明：如果要将表数据导出到html文件中，可以使用 --html 选项。然后可以使用浏览器打开。
+
+### 表的导入
+
+#### 使用load data infile导入文本文件
+**举例1：** 
+
+使用SELECT...INTO OUTFILE将atguigu数据库中account表的记录导出到文本文件
+
+在mysql中执行：
+```bash
+SELECT * FROM atguigu.account INTO OUTFILE '/var/lib/mysql-files/account_0.txt';
+```
+删除account表中的数据：
+```bash
+DELETE FROM atguigu.account;
+```
+从文本文件account.txt中恢复数据：
+```bash
+LOAD DATA INFILE '/var/lib/mysql-files/account_0.txt' INTO TABLE atguigu.account;
+```
+查询account表中的数据：
+```bash
+mysql> select * from account;
++----+--------+---------+
+| id | name   | balance |
++----+--------+---------+
+| 1 | 张三     | 90      |
+| 2 | 李四     | 100     |
+| 3 | 王五     | 0       |
++----+--------+---------+
+3 rows in set (0.00 sec)
+```
+
+
+**举例2：** 
+
+选择数据库atguigu，使用SELECT…INTO OUTFILE将atguigu数据库account表中的记录导出到文本文件，使用FIELDS选项和LINES选项，要求字段之间使用逗号"，"间隔，所有字段值用双引号括起来：
+```bash
+SELECT * FROM atguigu.account INTO OUTFILE '/var/lib/mysql-files/account_1.txt' FIELDS TERMINATED BY ',' ENCLOSED BY '\"';
+```
+
+删除account表中的数据：
+```bash
+DELETE FROM atguigu.account;
+```
+从/var/lib/mysql-files/account.txt中导入数据到account表中：
+```bash
+LOAD DATA INFILE '/var/lib/mysql-files/account_1.txt' INTO TABLE atguigu.account FIELDS TERMINATED BY ',' ENCLOSED BY '\"';
+```
+
+查询account表中的数据，具体SQL如下：
+```bash
+select * from account;
+mysql> select * from account;
++----+--------+---------+
+| id | name   | balance |
++----+--------+---------+
+| 1 | 张三     | 90      |
+| 2 | 李四     | 100     |
+| 3 | 王五     | 0       |
++----+--------+---------+
+3 rows in set (0.00 sec)
+```
+
+
+
+
+
+#### 使用mysqlimport方式导入文本文件
+
+
+**举例：**
+
+导出文件account.txt，字段之间使用逗号"，"间隔，字段值用双引号括起来：
+```bash
+SELECT * FROM atguigu.account INTO OUTFILE '/var/lib/mysql-files/account.txt' FIELDS TERMINATED BY ',' ENCLOSED BY '\"';
+```
+
+删除account表中的数据：
+```bash
+DELETE FROM atguigu.account;
+```
+
+使用mysqlimport命令将account.txt文件内容导入到数据库atguigu的account表中：
+```bash
+# 在linux中执行
+mysqlimport -uroot -p atguigu '/var/lib/mysql-files/account.txt' --fields-terminated-by=',' --fields-optionally-enclosed-by='\"'
+```
+查询account表中的数据：
+
+```bash
+select * from account;
+mysql> select * from account;
++----+--------+---------+
+| id | name   | balance |
++----+--------+---------+
+| 1 | 张三     | 90      |
+| 2 | 李四     | 100     |
+| 3 | 王五     | 0       |
++----+--------+---------+
+3 rows in set (0.00 sec)
+```
+
+其他参数
+- --host=host_name，-h host host_name：将数据导入给定主机上的MySQL服务器，默认主机是localhost。
+- --ignore，-i：参见--replace选项的描述。
+- --ignore-lines=n：忽视数据文件的前n行。
+- --local，-L：从本地客户端读入输入文件。
+- --lock-tables，-l：处理文本文件前锁定所有表，以便写入。这样可以确保所有表在服务器上保持同步。
+- --password[=password]，-p[password]：当连接服务器时使用的密码。如果使用短选项形式（-p），选项和密码之间不能有空格。如果在命令行中--password或-p选项后面没有密码值，就提示输入一个密码。
+- --port=port_num，-P port_num：用户连接的TCP/IP端口号。
+- --protocol={TCP|SOCKET|PIPE|MEMORY}：使用的连接协议。
+- --replace，-r --replace和--ignore选项控制复制唯一键值已有记录的输入记录的处理。如果指定--replace，新行替换有相同唯一键值的已有行；如果指定--ignore，复制已有唯一键值的输入行被跳过；如果不指定这两个选项，当发现一个复制键值时会出现一个错误，并且忽视文本文件的剩余部分。
+- --silent，-s：沉默模式。只有出现错误时才输出信息。
+- --user=username，-u user_name：当连接服务器时MySQL使用的用户名。
+- --verbose，-v：冗长模式。打印出程序操作的详细信息。
+- --version，-V：显示版本信息并退出。
+
+
+
+
+## 数据库迁移
+
+### 概述
+
+数据迁移（data migration）是指选择、准备、提取和转换数据，并将数据从一个计算机存储系统永久地传输到另一个计算机存储系统的过程。
+
+此外，验证迁移数据的完整性和退役原来旧的数据存储，也被认为是整个数据迁移过程的一部分。
+数据库迁移的原因是多样的，包括服务器或存储设备更换、维护或升级，应用程序迁移，网站集成，灾难恢复和数据中心迁移。
+
+根据不同的需求可能要采取不同的迁移方案，但总体来讲，MySQL数据迁移方案大致可以分为物理迁移和逻辑迁移两类。通常以尽可能自动化的方式执行，从而将人力资源从繁琐的任务中解放出来。
+
+### 迁移注意点
+
+**1. 相同版本的数据库之间迁移注意点**
+
+指的是在主版本号相同的MySQL数据库之间进行数据库移动。
+
+方式1： 因为迁移前后MySQL数据库的 `主版本号相同` ，所以可以通过复制数据库目录来实现数据库迁移，但是物理迁移方式只适用于MyISAM引擎的表。对于InnoDB表，不能用直接复制文件的方式备份数据库。
+
+方式2： 最常见和最安全的方式是使用 `mysqldump命令` 导出数据，然后在目标数据库服务器中使用 MySQL命令导入。
+
+举例：
+```bash
+#host1的机器中备份所有数据库,并将数据库迁移到名为host2的机器上
+mysqldump –h host1 –uroot –p –-all-databases|
+mysql –h host2 –uroot –p
+```
+在上述语句中，“|”符号表示管道，其作用是将mysqldump备份的文件给mysql命令；“--all-databases”表示要迁移所有的数据库。通过这种方式可以直接实现迁移。
+
+
+**2. 不同版本的数据库之间迁移注意点**
+
+例如，原来很多服务器使用5.7版本的MySQL数据库，在8.0版本推出来以后，改进了5.7版本的很多缺陷， 因此需要把数据库升级到8.0版本
+
+旧版本与新版本的MySQL可能使用不同的默认字符集，例如有的旧版本中使用latin1作为默认字符集，而最新版本的MySQL默认字符集为utf8mb4。如果数据库中有中文数据，那么迁移过程中需要对 默认字符集 进行修改 ，不然可能无法正常显示数据。
+
+高版本的MySQL数据库通常都会 `兼容低版本` ，因此可以从低版本的MySQL数据库迁移到高版本的MySQL数据库。
+
+**3. 不同数据库之间迁移注意点**
+
+不同数据库之间迁移是指从其他类型的数据库迁移到MySQL数据库，或者从MySQL数据库迁移到其他类 型的数据库。这种迁移没有普适的解决方法。
+
+迁移之前，需要了解不同数据库的架构， 比较它们之间的差异 。不同数据库中定义相同类型的数据的 关键字可能会不同 。例如，MySQL中日期字段分为DATE和TIME两种，而ORACLE日期字段只有DATE；SQL Server数据库中有ntext、Image等数据类型，MySQL数据库没有这些数据类型；MySQL支持的ENUM和SET 类型，这些SQL Server数据库不支持。
+
+另外，数据库厂商并没有完全按照SQL标准来设计数据库系统，导致不同的数据库系统的 SQL语句 有差别。例如，微软的SQL Server软件使用的是T-SQL语句，T-SQL中包含了非标准的SQL语句，不能和MySQL的SQL语句兼容。
+
+不同类型数据库之间的差异造成了互相 `迁移的困难` ，这些差异其实是商业公司故意造成的技术壁垒。但是不同类型的数据库之间的迁移并 `不是完全不可能` 。例如，可以使用 `MyODBC` 实现MySQL和SQL Server之 间的迁移。MySQL官方提供的工具 `MySQL Migration Toolkit` 也可以在不同数据之间进行数据迁移。 MySQL迁移到Oracle时，需要使用mysqldump命令导出sql文件，然后， `手动更改` sql文件中的CREATE语句。
+
+**迁移小结**
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/Snipaste_2025-11-05_22-11-22.png)
+
+
+## 误删操作，怎么办？
+
+传统的高可用架构是不能预防误删数据的，因为主库的一个drop table命令，会通过binlog传给所有从库和级联从库，进而导致整个集群的实例都会执行这个命令。
+为了找到解决误删数据的更高效的方法，我们需要先对和MySQL相关的误删数据，做下分类：
+1. 使用delete语句误删数据行；
+2. 使用drop table或者truncate table语句误删数据表；
+3. 使用drop database语句误删数据库；
+4. 使用rm命令误删整个MySQL实例。
+
+### delete：误删行
+
+- **处理措施1**：数据恢复
+使用`Flashback工具`恢复数据。
+
+原理：`修改binlog`内容，拿回原库重放。如果误删数据涉及到了多个事务的话，需要将事务的顺序调过来再执行。
+
+使用前提：binlog_format=row和binlog_row_image=FULL。
+
+- **处理措施2**：预防
+
+代码上线前，必须SQL审查、审计。
+
+建议可以打开安全模式，把`sql_safe_updates`参数设置为`on`。强制要求加where条件且where后需要是索引字段，否则必须使用limit。否则就会报错。
+
+
+### truncate/drop ：误删库/表
+
+
+**背景:**
+
+delete全表是很慢的,需要生成回滚日志、写redo、写binlog。所以,从性能角度考虑,优先考虑使用truncate table或者drop table命令。
+
+使用delete命令删除的数据,你还可以用Flashback来恢复。而使用truncate /drop table和drop database命令删除的数据,就没办法通过Flashback来恢复了。因为,即使我们配置了binlog_format=row,执行这三个命令时,记录的binlog还是statement格式。binlog里面就只有一个truncate/drop语句,这些信息是恢复不出数据的。
+
+**方案:**
+
+这种情况下恢复数据,需要使用`全量备份`与`增量日志`结合的方式。
+
+方案的前提:有定期的全量备份,并且实时备份binlog。
+
+举例:有人误删了一个库,时间为下午3点。步骤如下:
+
+1. 取最近一次`全量备份`。假设设置数据库库是一天一备,最近备份数据是当天`凌晨2点`;
+2. 用备份恢复出一个`临时库`;(注意:这里选择临时库,而不是直接操作主库)
+3. 取出凌晨2点之后的binlog日志;
+4. 剔除误删除数据的语句外,其它语句全部应用到临时库。(前面讲过binlog的恢复)
+5. 最后恢复到主库
+
+
+### 预防使用truncate/drop误删库/表
+
+上面我们说了使用 truncate /drop 语句误删库/表的恢复方案，在生产环境中可以通过下面建议的方案来尽量的避免类似的误操作。
+
+**（1）权限分离**
+
+- 限制帐户权限，核心的数据库，一般都`不能随便分配写权限`，想要获取写权限需要`审批`。比如只给业务开发人员 DML 权限，不给 truncate/drop 权限。即使是 DBA 团队成员，日常也都规定只使用`只读账号`，必要的时候才使用有更新权限的账号。
+- 不同的账号，不同的数据之间要进行`权限分离`，避免一个账号可以删除所有库。
+
+**（2）制定操作规范**
+
+比如在删除数据表之前，必须先对表做改名操作（比如加 `_to_be_deleted`）。然后，观察一段时间，确保对业务无影响以后再删除这张表。
+
+**（3）设置延迟复制备库**
+
+简单的说延迟复制就是设置一个固定的延迟时间，比如 1 个小时，让从库落后主库一个小时。出现误删除操作 1 小时内，到这个备库上执行 `stop slave`，再通过之前介绍的方法，跳过误操作命令，就可以恢复出需要的数据。这里通过 `CHANGE MASTER TO MASTER_DELAY = N `命令，可以指定这个备库持续保持跟主库有 N 秒的延迟。比如把 N 设置为 3600，即代表 1 个小时。
+
+此外，延迟复制还可以用来解决以下问题：
+
+① 用来做`延迟测试`，比如做好的数据库读写分离，把从库作为读库，那么想知道当数据产生延迟的时候到底会发生什么，就可以使用这个特性模拟延迟。
+
+② 用于`老数据的查询等需求`，比如你经常需要查看某天前一个表或者字段的数值，你可能需要把备份恢复后进行查看，如果有延迟从库，比如延迟一周，那么就可以解决这样类似的需求。
+
+
+### rm：误删MySQL实例
+对于一个有高可用机制的MySQL集群来说，不用担心 rm删除数据了。只是删掉了其中某一个节点的数据的话，HA系统就会开始工作，选出一个新的主库，从而保证整个集群的正常工作。我们要做的就是在这个节点上把数据恢复回来，再接入整个集群。
+
+但如果是恶意地把整个集群删除，那就需要考虑跨机房备份，跨城市备份。

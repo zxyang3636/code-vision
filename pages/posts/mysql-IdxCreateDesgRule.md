@@ -1,6 +1,7 @@
 ---
 title: MySQL - 索引的创建与设计原则
 categories: 数据库
+hidden: true
 tags:
   - MySQL
   - 后端

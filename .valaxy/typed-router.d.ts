@@ -50,6 +50,7 @@ declare module 'vue-router/auto-routes' {
     '/posts/mysql-otherDbLog': RouteRecordInfo<'/posts/mysql-otherDbLog', '/posts/mysql-otherDbLog', Record<never, never>, Record<never, never>>,
     '/posts/mysql-Transaction': RouteRecordInfo<'/posts/mysql-Transaction', '/posts/mysql-Transaction', Record<never, never>, Record<never, never>>,
     '/posts/rabbitmq-a': RouteRecordInfo<'/posts/rabbitmq-a', '/posts/rabbitmq-a', Record<never, never>, Record<never, never>>,
+    '/posts/redis-basic': RouteRecordInfo<'/posts/redis-basic', '/posts/redis-basic', Record<never, never>, Record<never, never>>,
     '/posts/spring-cloud': RouteRecordInfo<'/posts/spring-cloud', '/posts/spring-cloud', Record<never, never>, Record<never, never>>,
     '/posts/spring-mj': RouteRecordInfo<'/posts/spring-mj', '/posts/spring-mj', Record<never, never>, Record<never, never>>,
     '/posts/uniapp-dev': RouteRecordInfo<'/posts/uniapp-dev', '/posts/uniapp-dev', Record<never, never>, Record<never, never>>,

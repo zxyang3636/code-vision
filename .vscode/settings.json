@@ -8,9 +8,10 @@
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
   },
-  "editor.formatOnSave": false,
+  "editor.formatOnSave": true,
   "files.associations": {
     "*.css": "postcss"
   },
-  "svg.preview.background": "editor"
+  "svg.preview.background": "editor",
+  "files.autoSave": "afterDelay"
 }

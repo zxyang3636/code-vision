@@ -127,7 +127,7 @@ Redis诞生于2009年全称是Remote Dictionary Server，远程词典服务器�
 - 支持主从集群、分片集群
 - 支持多语言客户端
 
-作者：Antirez
+作者：Antirez [博客地址](http://oldblog.antirez.com/)
 
 Redis官网：https://redis.io/
 
@@ -139,7 +139,7 @@ Redis官网：https://redis.io/
 :::
 
 
-### 安装Redis 
+### 安装Redis
 
 
 
@@ -175,7 +175,7 @@ tar.gz包下载地址：https://redis.io/downloads/
 [root@localhost src]# ll
 总用量 2440
 -rw-r--r--. 1 root root 2496149 11月 11 22:56 redis-6.2.14.tar.gz
-[root@localhost src]# tar -zxvf redis-6.2.14.tar.gz 
+[root@localhost src]# tar -zxvf redis-6.2.14.tar.gz
 ```
 
 
@@ -212,7 +212,7 @@ redis的启动方式有很多种，例如：
 
 ##### 默认启动
 
-进入redis安装目录，执行redis-server 
+进入redis安装目录，执行redis-server
 ```bash
 cd redis-6.2.14
 
@@ -267,7 +267,7 @@ redis-server redis.conf
 ps -ef|grep redis
 
 # 杀掉redis进程
-kill -9 pid 
+kill -9 pid
 
 
 ```
@@ -329,7 +329,7 @@ systemctl disable redis
 
 **说明**
 
-> 这是一个典型的 systemd 服务配置文件，用于在 Linux 系统上开机自启 Redis 服务。  
+> 这是一个典型的 systemd 服务配置文件，用于在 Linux 系统上开机自启 Redis 服务。
 > 其中：
 > - `ExecStart` 指定了启动命令和配置文件路径；
 > - `After=network.target` 表示在网络启动后运行；

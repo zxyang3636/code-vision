@@ -335,3 +335,224 @@ systemctl disable redis
 > - `After=network.target` 表示在网络启动后运行；
 > - `WantedBy=multi-user.target` 表示开机时启用该服务。
 
+
+
+#### Redis客户端
+
+
+安装完成Redis，我们就可以操作Redis，实现数据的CRUD了。这需要用到Redis客户端，包括：
+- 命令行客户端
+- 图形化桌面客户端
+- 编程客户端
+
+
+
+##### Redis命令行客户端
+
+Redis安装完成后就自带了命令行客户端：redis-cli，使用方式如下：
+
+```bash
+redis-cli [options] [command]
+```
+
+常见的options有
+- `-h 127.0.0.1`: 指定要连接的redis节点的IP地址，默认是`127.0.0.1`
+- `-p 6379`: 指定要连接的redis节点的端口，默认是`6379`
+- `-a 123123`: 指定要连接的redis节点的密码
+
+其中的commonds就是Redis的操作命令，例如：
+- `ping`：与redis服务端做心跳测试，服务端正常会返回`pong`
+
+不指定commond时，会进入`redis-cLi`的交互控制台：
+```bash
+redis-cli
+
+redis-cli -a 密码
+
+127.0.0.1:6379> ping
+PONG
+
+127.0.0.1:6379> set name jack
+OK
+127.0.0.1:6379> get name
+"jack"
+
+```
+或者
+```bash
+[root@192 redis-6.2.14]# redis-cli
+127.0.0.1:6379> get name
+(error) NOAUTH Authentication required.
+127.0.0.1:6379> Auth 密码
+OK
+```
+
+
+##### 图形化桌面客户端
+
+
+GitHub上的大神编写了Redis的图形化桌面客户端，地址：https://github.com/uglide/RedisDesktopManager
+
+不过该仓库提供的是RedisDesktopManager的源码，并未提供windows安装包。
+
+在下面这个仓库可以找到安装包：https://github.com/lework/RedisDesktopManager-Windows/releases
+
+
+或者使用这个[现代化Redis桌面客户端](https://redis.tinycraft.cc/zh/)
+
+- 如果连不上，设置防火墙
+```bash
+# 永久放行 Redis 端口（6379）
+firewall-cmd --permanent --add-port=6379/tcp
+
+# 重载防火墙规则
+firewall-cmd --reload
+
+# 验证端口是否已开放
+firewall-cmd --list-ports | grep 6379
+```
+
+
+## Redis命令
+
+
+### Redis数据结构介绍
+
+Redis是一个key-value的数据库，key一般是String类型，不过value的类型多种多样：
+
+# Redis 数据类型分类
+
+| 类型       | 示例值                          | 分类     |
+|------------|----------------------------------|----------|
+| String     | `hello world`                   | 基本类型 |
+| Hash       | `{name: "Jack", age: 21}`       | 基本类型 |
+| List       | `[A -> B -> C -> C]`            | 基本类型 |
+| Set        | `{A, B, C}`                     | 基本类型 |
+| SortedSet  | `{A: 1, B: 2, C: 3}`            | 基本类型 |
+| GEO        | `{A: (120.3, 30.5)}`            | 特殊类型 |
+| BitMap     | `0110110101110101011`           | 特殊类型 |
+| HyperLog   | `0110110101110101011`           | 特殊类型 |
+
+> 📌 **说明：**
+>
+> - **基本类型**：String、Hash、List、Set、SortedSet 是 Redis 最常用的五种数据结构。
+> - **特殊类型**：GEO（地理位置）、BitMap（位图）、HyperLog（基数估算）是基于基础结构封装的高级功能，用于特定场景优化。
+
+Redis为了方便我们学习，将操作不同数据类型的命令也做了分组，在官网  https://redis.io/commands  可以查看
+到不同的命令
+
+### Redis通用命令
+
+通用指令是部分数据类型的，都可以使用的指令，常见的有：
+
+- **KEYS**：查看符合模板的所有 key，<span style="color: red;">不建议在生产环境设备上使用</span>
+- **DEL**：删除一个指定的 key
+- **EXISTS**：判断 key 是否存在
+- **EXPIRE**：给一个 key 设置有效期，有效期到期时该 key 会被自动删除
+- **TTL**：查看一个 KEY 的剩余有效期
+
+通过 `help [command]` 可以查看一个命令的具体用法，例如：
+
+
+**KEYS命令：**
+```bash
+127.0.0.1:6379> help KEYS
+
+  KEYS pattern
+  summary: Find all keys matching the given pattern
+  since: 1.0.0
+  group: generic
+
+127.0.0.1:6379> 
+
+# 列出所有key
+127.0.0.1:6379> KEYS *
+1) "name"
+
+# 模糊查询key 以n开头的key
+127.0.0.1:6379> KEYS n*
+1) "name"
+
+```
+
+**DEL命令：**
+```bash
+127.0.0.1:6379> KEYS *
+1) "age"
+2) "name"
+127.0.0.1:6379> DEL age name
+(integer) 2
+127.0.0.1:6379> KEYS *
+(empty array)
+127.0.0.1:6379> 
+```
+
+**EXISTS命令：**
+```bash
+127.0.0.1:6379> help EXISTS
+
+  EXISTS key [key ...]
+  summary: Determine if a key exists
+  since: 1.0.0
+  group: generic
+
+127.0.0.1:6379> EXISTS name
+(integer) 0
+127.0.0.1:6379> set age 18
+OK
+127.0.0.1:6379> EXISTS age
+(integer) 1
+127.0.0.1:6379> 
+```
+
+**EXPIRE命令 TTL命令：**
+```bash
+127.0.0.1:6379> help EXPIRE
+
+  EXPIRE key seconds
+  summary: Set a key's time to live in seconds
+  since: 1.0.0
+  group: generic
+
+127.0.0.1:6379> EXPIRE age 20
+(integer) 1
+127.0.0.1:6379> TTL age
+(integer) 16
+127.0.0.1:6379> TTL age
+(integer) -2
+127.0.0.1:6379> 
+
+
+# -2 表示key者已经过期
+# -1 表示永久有效
+```
+
+
+
+
+
+
+### String类型
+
+
+
+
+### Hash类型
+
+
+
+
+### List类型
+
+
+
+
+### Set类型
+
+
+
+
+### SortedSet类型
+
+
+

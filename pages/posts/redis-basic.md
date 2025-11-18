@@ -534,10 +534,189 @@ OK
 
 ### String类型
 
+String类型，也就是字符串类型，是Redis中最简单的存储类型
+
+其value是字符串，不过根据字符串的格式不同，又可以分为3类
+
+- string：普通字符串
+- int：整数类型，可以做自增、自减操作
+- float：浮点类型，可以做自增、自减操作
+不管是哪种格式，底层都是字节数组形式存储，只不过是编码方式不同，字符串类型的最大空间不能超过512M
+
+**String类型常见命令：**
+
+- SET：添加或者修改已经存在的一个String类型的键值对
+- GET：根据key获取String类型的value
+- MSET：批量添加多个String类型的键值对
+- MGET：根据多个key获取多个String类型的value
+- INCR：让一个整型的key自增1。
+- INCRBY:让一个整型的key自增并指定步长，例如：incrby num 2 让num值自增2
+- INCRBYFLOAT：让一个浮点类型的数字自增并指定步长
+
+```bash
+127.0.0.1:6379> MSET k1 v1 k2 v2
+OK
+127.0.0.1:6379> MGET k1 k2
+1) "v1"
+2) "v2"
+127.0.0.1:6379> 
+
+
+127.0.0.1:6379> set age 18
+OK
+127.0.0.1:6379> INCR age
+(integer) 19
+127.0.0.1:6379> get age
+"19"
+
+
+127.0.0.1:6379> set num 10.1
+OK
+127.0.0.1:6379> INCRBYFLOAT num 0.5
+"10.6"
+127.0.0.1:6379> INCRBYFLOAT num 0.5
+"11.1"
+127.0.0.1:6379> INCRBYFLOAT num 0.5
+"11.6"
+127.0.0.1:6379> get num
+"11.6"
+127.0.0.1:6379> 
+```
+
+#### Key的层级格式
+
+Redis没有类似MySQL中Table的概念，那么我们该如何区分不同类型的Key呢？
+
+例如：需要存储用户、商品信息到Redis，有一个用户的id是1，有一个商品的id恰好也是1，如果此时使用id作为key，那么就会发生冲突，该怎么办？
+
+
+我们可以通过给key添加前缀加以区分，不过这个前缀不是随便加的，有一定的规范
+
+- Redis的key允许有多个单词形成层级结构，多个单词之间用:隔开，格式如下
+```bash
+项目名:业务名:类型:id
+```
+这个格式也并非是固定的，可以根据自己的需求来删除/添加词条，这样我们就可以把不同数据类型的数据区分开了，从而避免了key的冲突问题
+
+例如我们的项目名称叫 `codevision`，有 `user` 和 `product` 两种不同类型的数据，我们可以这样定义 key：
+
+-  user 相关的 key：`codevision:user:1`
+-  product 相关的 key：`codevision:product:1`
+
+如果 Value 是一个 Java 对象，例如一个 User 对象，则可以将对象序列化为 JSON 字符串后存储：
+
+| KEY               | VALUE                                  |
+|-------------------|----------------------------------------|
+| `codevision:user:1`    | `{"id":1, "name": "Jack", "age": 21}`   |
+| `codevision:product:1` | `{"id":1, "name": "小米11", "price": 4999}` |
+
+一旦我们向redis采用这样的方式存储，那么在可视化界面中，redis会以层级结构来进行存储，形成类似于这样的结构，更加方便Redis获取数据。
+
+
+**String 类型的三种格式**
+
+- 字符串  
+- int  
+- float  
+
+ **Redis 的 key 格式规范**
+
+- `[项目名]:[业务名]:[类型]:[id]`
+
+
+
 
 
 
 ### Hash类型
+
+
+
+Hash类型，也叫散列，其value是一个无序字典，类似于Java中的HashMap结构。
+
+ String 类型存储对象的问题:
+
+当使用 String 类型存储对象时，通常会将对象序列化为 JSON 字符串后存储。这种方式在需要修改对象某个字段时非常不便：
+
+| KEY             | VALUE                                  |
+|------------------|----------------------------------------|
+| `heima:user:1`   | `{"name":"Jack", "age":21}`            |
+| `heima:user:2`   | `{"name":"Rose", "age":18}`            |
+
+
+---
+
+**Hash 类型的优势：支持字段级 CRUD**
+
+Hash 结构可以将对象中的每个字段独立存储，允许对单个字段进行增删改查（CRUD），无需操作整个对象：
+
+| KEY             | FIELD | VALUE |
+|------------------|-------|-------|
+| `heima:user:1`   | name  | Jack  |
+| `heima:user:1`   | age   | 21    |
+| `heima:user:2`   | name  | Rose  |
+| `heima:user:2`   | age   | 18    |
+
+
+```bash
+127.0.0.1:6379> HSET codevision:user:3 name zhangSan
+(integer) 1
+
+127.0.0.1:6379> HGET codevision:user:3 name
+"zhangSan"
+
+127.0.0.1:6379> HMSET codevision:user:4 name Lucy sex man age 40
+OK
+127.0.0.1:6379> HMGET codevision:user:4 name age
+1) "Lucy"
+2) "40"
+127.0.0.1:6379> 
+
+127.0.0.1:6379> HGETALL codevision:user:3
+1) "name"
+2) "zhangSan"
+3) "age"
+4) "17"
+127.0.0.1:6379> 
+
+127.0.0.1:6379> HKEYS codevision:user:3
+1) "name"
+2) "age"
+127.0.0.1:6379> 
+
+127.0.0.1:6379> HVALS codevision:user:3
+1) "zhangSan"
+2) "17"
+127.0.0.1:6379> 
+
+
+127.0.0.1:6379> HINCRBY codevision:user:3 age 2
+(integer) 19
+127.0.0.1:6379> HINCRBY codevision:user:3 age 2
+(integer) 21
+127.0.0.1:6379> HINCRBY codevision:user:3 age 2
+(integer) 23
+127.0.0.1:6379> 
+
+
+127.0.0.1:6379> HSETNX codevision:user:3 age 45  # 没有成功，已经存在
+(integer) 0
+127.0.0.1:6379> HSETNX codevision:user:3 sex man
+(integer) 1
+127.0.0.1:6379> 
+```
+
+
+Hash的常见命令有：
+- HSET key field value：添加或者修改hash类型key的field的值
+- HGET key field：获取一个hash类型key的field的值
+- HMSET：批量添加多个hash类型key的field的值
+- HMGET：批量获取多个hash类型key的field的值
+- HGETALL：获取一个hash类型的key中的所有的field和value
+- HKEYS：获取一个hash类型的key中的所有的field
+- HVALS：获取一个hash类型的key中的所有的value
+- HINCRBY:让一个hash类型key的字段值自增并指定步长
+- HSETNX：添加一个hash类型的key的field值，前提是个这个field不存在，否则不执行
 
 
 

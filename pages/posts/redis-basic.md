@@ -723,15 +723,409 @@ Hash的常见命令有：
 
 ### List类型
 
+Redis中的List类型与Java中的LinkedList类似，可以看做一个双向链表结构。既可以支持正向检索和也可以支持反向检索。
+
+特征也与LinkedList类似：
+- 有序
+- 元素可以重复
+- 插入和删除快
+- 查询速度一般
+
+常用来存储一个有序数据，例如：朋友圈点赞列表，评论列表等。
+
+List的常见命令有：
+- LPUSH key element ...：向列表左侧插入一个或多个元素
+- LPOP key：移除并返回列表左侧的第一个元素，没有则返回nil
+- RPUSH key element ...：向列表右侧插入一个或多个元素
+- RPOP key：移除并返回列表右侧的第一个元素
+- LRANGE key start end：返回一段角标范围内的所有元素
+- BLPOP和BRPOP：与LPOP和RPOP类似，只不过在没有元素时等待指定时间，而不是直接返回nil
+
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251119215647668.png)
+
+```bash
+127.0.0.1:6379> LPUSH users 1 2 3 
+(integer) 3
+127.0.0.1:6379> 
+127.0.0.1:6379> RPUSH users 4 5 6
+(integer) 6
+127.0.0.1:6379> LPOP users 1
+1) "3"
+127.0.0.1:6379> RPOP users 1
+1) "6"
+127.0.0.1:6379> LRANGE users 1 4  # 下标从0开始计
+1) "1"
+2) "4"
+3) "5"
+127.0.0.1:6379> 
+
+
+127.0.0.1:6379> BLPOP users2 10 # 如果在10s内没有元素被加入，则返回nil，如果有元素加入就会获取到
+(nil)
+(10.10s)
+127.0.0.1:6379> 
+```
+
+
+**如何利用List结构模拟一个栈？**
+
+- 入口和出口在同一边。使用LPUSH/LPOP 或 RPUSH/RPOP进行元素操作。
+
+**如何利用List结构模拟一个队列？**
+
+- 入口和出口在不同边。使用LPUSH/RPOP 或 RPUSH/LPOP进行元素操作。
+
+**如何利用List结构模拟一个阻塞队列？**
+
+- 入口和出口在不同边，且出队时采用BLPOP或BRPOP
+
+
+
+栈：先进后出（像一个人喝酒喝多了吐了）
+
+队列：先进先出（像一个人喝酒没有吐，从下面排放出去😂）
+
+
+
 
 
 
 ### Set类型
+
+Redis中的Set结构与Java中的HashSet类似，可以看做一个value为null的HashMap。因为也是一个hash表，因此具备与HashSet类似的特征：
+- 无序
+- 元素不可重复
+- 查找快
+- 支持交集、并集、差集等功能
+
+Set的常见命令有：
+- SADD key member ...：向set中添加一个或多个元素
+- SREM key member ...：移除set中的指定元素
+- SCARD key：返回set中元素的个数
+- SISMEMBER key member：判断一个元素是否存在于set中
+- SMEMBERS：获取set中的所有元素
+- SINTER key1 key2 ...：求key1与key2的交集
+- SDIFF key1 key2 ...：求key1与key2的差集
+- SUNION key1 key2 ...：求key1和key2的并集
+
+
+```bash
+127.0.0.1:6379> SADD s1 1 2 3
+(integer) 3
+127.0.0.1:6379> SMEMBERS s1
+1) "1"
+2) "2"
+3) "3"
+127.0.0.1:6379> SREM s1 1
+(integer) 1
+127.0.0.1:6379> SISMEMBER s1 1
+(integer) 0
+127.0.0.1:6379> SISMEMBER s1 b
+(integer) 0
+127.0.0.1:6379> SISMEMBER s1 2
+(integer) 1
+127.0.0.1:6379> SCARD s1
+(integer) 2
+127.0.0.1:6379> 
+
+
+```
+
+**如图：**
+
+`INTER`交集BC
+
+`S1 DIFF S2`差集A
+
+并集ABCD;
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251120001443371.png)
+
+
+
+**Set命令的练习**
+
+将下列数据用Redis的Set集合来存储：
+- 张三的好友有：李四、王五、赵六
+- 李四的好友有：王五、麻子、二狗
+
+```bash
+127.0.0.1:6379> SADD zs lisi wangwu zhaoliu
+(integer) 3
+127.0.0.1:6379> SADD ls wangwu mazi ergou 
+(integer) 3
+127.0.0.1:6379> 
+```
+
+利用Set的命令实现下列功能：
+- 计算张三的好友有几人
+- 计算张三和李四有哪些共同好友
+- 查询哪些人是张三的好友却不是李四的好友
+- 查询张三和李四的好友总共有哪些人
+- 判断李四是否是张三的好友
+- 判断张三是否是李四的好友
+- 将李四从张三的好友列表中移除
+
+```bash
+127.0.0.1:6379> SCARD zs
+(integer) 3
+127.0.0.1:6379> 
+
+127.0.0.1:6379> SINTER zs ls
+1) "wangwu"
+127.0.0.1:6379> 
+
+127.0.0.1:6379> SDIFF zs ls
+1) "lisi"
+2) "zhaoliu"
+127.0.0.1:6379> 
+
+127.0.0.1:6379> SUNION zs ls
+1) "zhaoliu"
+2) "lisi"
+3) "ergou"
+4) "wangwu"
+5) "mazi"
+127.0.0.1:6379> 
+
+127.0.0.1:6379> SISMEMBER zs lisi
+(integer) 1
+
+127.0.0.1:6379> SISMEMBER ls zhangsan
+(integer) 0
+
+127.0.0.1:6379> SREM zs lisi
+(integer) 1
+127.0.0.1:6379> 
+```
+
+
 
 
 
 
 ### SortedSet类型
 
+Redis的SortedSet是一个可排序的set集合，与Java中的TreeSet有些类似，但底层数据结构却差别很大。SortedSet中的每一个元素都带有一个score属性，可以基于score属性对元素排序，底层的实现是一个跳表（SkipList）加 hash表。
 
+SortedSet具备下列特性：
+- 可排序
+- 元素不重复
+- 查询速度快
+
+因为SortedSet的可排序特性，经常被用来实现排行榜这样的功能。
+
+
+
+SortedSet的常见命令有：
+- ZADD key score member：添加一个或多个元素到sorted set，如果已经存在则更新其score值
+- ZREM key member：删除sorted set中的一个指定元素
+- ZSCORE key member：获取sorted set中的指定元素的score值
+- ZRANK key member：获取sorted set中的指定元素的排名
+- ZCARD key：获取sorted set中的元素个数
+- ZCOUNT key min max：统计score值在给定范围内的所有元素的个数
+- ZINCRBY key increment member：让sorted set中的指定元素自增，步长为指定的increment值
+- ZRANGE key min max：按照score排序后，获取指定排名范围内的元素
+- ZRANGEBYSCORE key min max：按照score排序后，获取指定score范围内的元素
+- ZDIFF、ZINTER、ZUNION：求差集、交集、并集
+>注意：所有的排名默认都是升序，如果要降序则在命令的Z后面添加REV即可
+
+```bash
+127.0.0.1:6379> help @sorted_set
+
+  BZPOPMAX key [key ...] timeout
+  summary: Remove and return the member with the highest score from one or more sorted sets, or block until one is available
+  since: 5.0.0
+
+  BZPOPMIN key [key ...] timeout
+  summary: Remove and return the member with the lowest score from one or more sorted sets, or block until one is available
+  since: 5.0.0
+
+  ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]
+  summary: Add one or more members to a sorted set, or update its score if it already exists
+  since: 1.2.0
+
+  ZCARD key
+  summary: Get the number of members in a sorted set
+  since: 1.2.0
+
+  ZCOUNT key min max
+  summary: Count the members in a sorted set with scores within the given values
+  since: 2.0.0
+
+  ZDIFF numkeys key [key ...] [WITHSCORES]
+  summary: Subtract multiple sorted sets
+  since: 6.2.0
+
+  ZDIFFSTORE destination numkeys key [key ...]
+  summary: Subtract multiple sorted sets and store the resulting sorted set in a new key
+  since: 6.2.0
+
+  ZINCRBY key increment member
+  summary: Increment the score of a member in a sorted set
+  since: 1.2.0
+
+  ZINTER numkeys key [key ...] [WEIGHTS weight] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+  summary: Intersect multiple sorted sets
+  since: 6.2.0
+
+  ZINTERSTORE destination numkeys key [key ...] [WEIGHTS weight] [AGGREGATE SUM|MIN|MAX]
+  summary: Intersect multiple sorted sets and store the resulting sorted set in a new key
+  since: 2.0.0
+
+  ZLEXCOUNT key min max
+  summary: Count the number of members in a sorted set between a given lexicographical range
+  since: 2.8.9
+
+  ZMSCORE key member [member ...]
+  summary: Get the score associated with the given members in a sorted set
+  since: 6.2.0
+
+  ZPOPMAX key [count]
+  summary: Remove and return members with the highest scores in a sorted set
+  since: 5.0.0
+
+  ZPOPMIN key [count]
+  summary: Remove and return members with the lowest scores in a sorted set
+  since: 5.0.0
+
+  ZRANDMEMBER key [count [WITHSCORES]]
+  summary: Get one or multiple random elements from a sorted set
+  since: 6.2.0
+
+  ZRANGE key min max [BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES]
+  summary: Return a range of members in a sorted set
+  since: 1.2.0
+
+  ZRANGEBYLEX key min max [LIMIT offset count]
+  summary: Return a range of members in a sorted set, by lexicographical range
+  since: 2.8.9
+
+  ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]
+  summary: Return a range of members in a sorted set, by score
+  since: 1.0.5
+
+  ZRANGESTORE dst src min max [BYSCORE|BYLEX] [REV] [LIMIT offset count]
+  summary: Store a range of members from sorted set into another key
+  since: 6.2.0
+
+  ZRANK key member
+  summary: Determine the index of a member in a sorted set
+  since: 2.0.0
+
+  ZREM key member [member ...]
+  summary: Remove one or more members from a sorted set
+  since: 1.2.0
+
+  ZREMRANGEBYLEX key min max
+  summary: Remove all members in a sorted set between the given lexicographical range
+  since: 2.8.9
+
+  ZREMRANGEBYRANK key start stop
+  summary: Remove all members in a sorted set within the given indexes
+  since: 2.0.0
+
+  ZREMRANGEBYSCORE key min max
+  summary: Remove all members in a sorted set within the given scores
+  since: 1.2.0
+
+  ZREVRANGE key start stop [WITHSCORES]
+  summary: Return a range of members in a sorted set, by index, with scores ordered from high to low
+  since: 1.2.0
+
+  ZREVRANGEBYLEX key max min [LIMIT offset count]
+  summary: Return a range of members in a sorted set, by lexicographical range, ordered from higher to lower strings.
+  since: 2.8.9
+
+  ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]
+  summary: Return a range of members in a sorted set, by score, with scores ordered from high to low
+  since: 2.2.0
+
+  ZREVRANK key member
+  summary: Determine the index of a member in a sorted set, with scores ordered from high to low
+  since: 2.0.0
+
+  ZSCAN key cursor [MATCH pattern] [COUNT count]
+  summary: Incrementally iterate sorted sets elements and associated scores
+  since: 2.8.0
+
+  ZSCORE key member
+  summary: Get the score associated with the given member in a sorted set
+  since: 1.2.0
+
+  ZUNION numkeys key [key ...] [WEIGHTS weight] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+  summary: Add multiple sorted sets
+  since: 6.2.0
+
+  ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight] [AGGREGATE SUM|MIN|MAX]
+  summary: Add multiple sorted sets and store the resulting sorted set in a new key
+  since: 2.0.0
+
+```
+
+**SortedSet命令练习**
+
+将班级的下列学生得分存入Redis的SortedSet中：
+Jack 85, Lucy 89, Rose 82, Tom 95, Jerry 78, Amy 92, Miles 76
+
+- 并实现下列功能：
+- 删除Tom同学
+- 获取Amy同学的分数
+- 获取Rose同学的排名
+- 查询80分以下有几个学生
+- 给Amy同学加2分
+- 查出成绩前3名的同学
+- 查出成绩80分以下的所有同学
+
+```bash
+127.0.0.1:6379> ZADD stus 85 Jack 89 Lucy 82 Rose 95 Tom 78 Jerry 92 Amy 76 Miles
+(integer) 7
+127.0.0.1:6379> 
+127.0.0.1:6379> ZREM stus Tom
+(integer) 1
+
+127.0.0.1:6379> ZRANK stus Rose # 注意返回的排名是从0开始的，(ZRANK升序)
+(integer) 2
+127.0.0.1:6379> ZREVRANK stus Rose
+(integer) 3
+127.0.0.1:6379> 
+127.0.0.1:6379> ZCOUNT stus 0 80
+(integer) 2
+127.0.0.1:6379> 
+127.0.0.1:6379> ZINCRBY stus 2 Amy
+"94"
+127.0.0.1:6379> 
+127.0.0.1:6379> ZREVRANGE stus 0 2 # 注意这个命令是角标
+1) "Amy"
+2) "Lucy"
+3) "Jack"
+127.0.0.1:6379> 
+127.0.0.1:6379> ZRANGEBYSCORE stus 0 80
+1) "Miles"
+2) "Jerry"
+127.0.0.1:6379> 
+```
+
+
+
+
+##  Redis的Java客户端
+
+###  客户端对比
+
+在Redis官网中提供了各种语言的客户端，地址：https://redis.io/clients
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251120010555030.png)
+
+
+
+### Jedis
+
+
+
+
+
+
+
+### SpringDataRedis
 

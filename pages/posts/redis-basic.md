@@ -833,12 +833,13 @@ Set的常见命令有：
 ```
 
 **如图：**
+```
+INTER交集BC
 
-`INTER`交集BC
+S1 DIFF S2差集A
 
-`S1 DIFF S2`差集A
-
-并集ABCD;
+并集ABCD
+```
 ![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251120001443371.png)
 
 
@@ -1122,10 +1123,181 @@ Jack 85, Lucy 89, Rose 82, Tom 95, Jerry 78, Amy 92, Miles 76
 ### Jedis
 
 
+#### Jedis快速入门
+Jedis的官网地址： [https://github.com/redis/jedis](https://github.com/redis/jedis)，我们先来个快速入门
+
+Jedis使用的基本步骤：
+
+1. 引入依赖
+2. 创建jedis对象，建立连接
+3. 使用jedis，方法名与Redis命令一致
+4. 释放资源
+
+1. 引入依赖：
+
+```xml
+<dependency>
+    <groupId>redis.clients</groupId>
+    <artifactId>jedis</artifactId>
+    <version>3.7.0</version>
+</dependency>
+```
+
+```java
+private Jedis jedis;
+
+@BeforeEach
+void setUp() {
+    // 建立连接
+    jedis = new Jedis("192.168.150.101", 6379);
+    // 设置密码
+    jedis.auth("123321");
+    // 选择库
+    jedis.select(0);
+}
+```
+
+3. 测试string
+
+```java
+@Test
+void testString() {
+    // 插入数据，方法名称就是redis命令名称，非常简单
+    String result = jedis.set("name", "张三");
+    System.out.println("result = " + result);
+    // 获取数据
+    String name = jedis.get("name");
+    System.out.println("name = " + name);
+}
+```
+
+- 释放资源
+```java
+@AfterEach
+void tearDown() {
+    // 释放资源
+    if (jedis != null) {
+        jedis.close();
+    }
+}
+```
+
+所有代码
+```java
+package com.zzyang.jedis;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import redis.clients.jedis.Jedis;
+
+public class JedisTest {
+
+    private Jedis jedis;
+
+    @BeforeEach
+    void setUp() {
+        jedis = new Jedis("192.168.9.128", 6379);
+        jedis.auth("Zzy20020913.");
+        jedis.select(0);
+    }
+
+    @Test
+    void testString() {
+        String result = jedis.set("name", "zzy");
+        System.out.println("result = " + result);
+
+        String name = jedis.get("name");
+        System.out.println("name = " + name);
+    }
+
+    @Test
+    void testHash() {
+        // 插入hash数据
+        jedis.hmset("user:5", Map.of("name", "Jack"));
+        jedis.hmset("user:5", Map.of("age", "21"));
+        Map<String, String> map = jedis.hgetAll("user:5");
+        System.out.println("map = " + map);
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (jedis != null) {
+            jedis.close();
+        }
+    }
+}
+
+```
 
 
 
+#### Jedis连接池
+
+Jedis本身是线程不安全的，并且频繁的创建和销毁连接会有性能损耗，因此我们推荐大家使用Jedis连接池代替Jedis的
+直连方式。
+
+创建一个工具类
+```java
+package com.zzyang.jedis.utils;
+
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
+
+public class JedisConnectionFactory {
+
+    private static final JedisPool jedisPool;
+
+    static {
+        JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
+        jedisPoolConfig.setMaxTotal(8); // 最大连接数
+        jedisPoolConfig.setMaxIdle(8);  // 最大空闲连接数
+        jedisPoolConfig.setMinIdle(0);   // 最小空闲连接数
+        jedisPoolConfig.setMaxWaitMillis(1000); // 设置获取连接的最大等待时间，单位毫秒
+        jedisPool = new JedisPool(jedisPoolConfig, "192.168.9.128", 6379, 1000, "密码");
+    }
+
+    public static Jedis getJedis() {
+        return jedisPool.getResource();
+    }
+}
+
+```
+
+修改
+```java
+    @BeforeEach
+    void setUp() {
+//        jedis = new Jedis("192.168.9.128", 6379);
+        jedis = JedisConnectionFactory.getJedis();
+        jedis.auth("Zzy20020913.");
+        jedis.select(0);
+    }
+```
 
 
-### SpringDataRedis
+### Redis的Java客户端
 
+
+#### 认识SpringDataRedis
+
+SpringData是Spring中数据操作的模块，包含对各种数据库的集成，其中对Redis的集成模块就叫做SpringDataRedis，官网地址：https://spring.io/projects/spring-data-redis
+
+- 提供了对不同Redis客户端的整合（Lettuce和Jedis）
+- 提供了RedisTemplate统一API来操作Redis
+- 支持Redis的发布订阅模型
+- 支持Redis哨兵和Redis集群
+- 支持基于Lettuce的响应式编程
+- 支持基于JDK.JSON.字符串.Spring对象的数据序列化及反序列化（方便数据的存储和读取）
+- 支持基于Redis的JDKCollection实现
+
+
+#### RedisTemplate快速入门
+
+
+#### RedisTemplate的RedisSerializer
+
+#### StringRedisTemplate
+
+#### RedisTemplate操作Hash

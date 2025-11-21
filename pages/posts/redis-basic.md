@@ -1289,11 +1289,83 @@ SpringData是Spring中数据操作的模块，包含对各种数据库的集成�
 - 支持Redis的发布订阅模型
 - 支持Redis哨兵和Redis集群
 - 支持基于Lettuce的响应式编程
-- 支持基于JDK.JSON.字符串.Spring对象的数据序列化及反序列化（方便数据的存储和读取）
+- 支持基于JDK、JSON、字符串、Spring对象的数据序列化及反序列化（方便数据的存储和读取）
 - 支持基于Redis的JDKCollection实现
+
+SpringDataRedis中提供了RedisTemplate工具类，其中封装了各种对Redis的操作。像redis一样，对不同数据类型做了分组，将不同数据类型的操作API封装到了不同的类型中：
+
+| API | 返回值类型 | 说明 |
+|-----|------------|------|
+| `redisTemplate.opsForValue()` | ValueOperations | 操作String类型数据 |
+| `redisTemplate.opsForHash()` | HashOperations | 操作Hash类型数据 |
+| `redisTemplate.opsForList()` | ListOperations | 操作List类型数据 |
+| `redisTemplate.opsForSet()` | SetOperations | 操作Set类型数据 |
+| `redisTemplate.opsForZSet()` | ZSetOperations | 操作SortedSet类型数据 |
+| `redisTemplate` | - | 通用的命令 |
 
 
 #### RedisTemplate快速入门
+
+SpringBoot已经提供了对SpringDataRedis的支持，使用非常简单：
+
+1. 引入依赖
+
+```xml
+<!--Redis依赖-->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+<!--连接池依赖-->
+<dependency>
+    <groupId>org.apache.commons</groupId>
+    <artifactId>commons-pool2</artifactId>
+</dependency>
+```
+
+2. 配置文件
+
+```yaml
+spring:
+  redis:
+    host: 192.168.150.101
+    port: 6379
+    password: 123321
+    lettuce:
+      pool:
+        max-active: 8  # 最大连接
+        max-idle: 8    # 最大空闲连接
+        min-idle: 0    # 最小空闲连接
+        max-wait: 100  # 连接等待时间
+```
+
+3. 注入RedisTemplate
+
+```java
+@Autowired
+private RedisTemplate redisTemplate;
+```
+
+```java
+@SpringBootTest
+public class RedisTest {
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @Test
+    void testString() {
+        // 插入一条string类型数据
+        redisTemplate.opsForValue().set("name", "李四");
+        // 读取一条string类型数据
+        Object name = redisTemplate.opsForValue().get("name");
+        System.out.println("name = " + name);
+    }
+}
+```
+
+
+
 
 
 #### RedisTemplate的RedisSerializer

@@ -2002,3 +2002,28 @@ Spring默认提供了一个StringRedisTemplate类，它的key和value的序列�
 ![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251124224450996.png)
 
 #### RedisTemplate操作Hash
+
+```java
+    @Test
+    void testHash() {
+        redisTemplate.opsForHash().put("user:300", "age", 20);
+        redisTemplate.opsForHash().put("user:300", "name", "wangWu");
+        Map<Object, Object> entries = redisTemplate.opsForHash().entries("user:300");
+        System.out.println("entries = " + entries);
+    }
+```
+
+
+
+
+:::info
+参考
+
+https://catpaws.top/e0606bbf/
+
+https://cyborg2077.github.io/2022/10/21/RedisBasic/#List%E7%B1%BB%E5%9E%8B
+
+https://pan.baidu.com/s/1189u6u4icQYHg_9_7ovWmA?pwd=eh11#list/path=%2F&parentPath=%2Fsharelink3232509500-235828228909890
+
+
+:::

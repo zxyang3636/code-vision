@@ -436,12 +436,83 @@ public class MvcConfig implements WebMvcConfigurer {
 - 运维成本（为保证缓存高可用，需要搭建缓存集群，增加运维成本）
 ### 添加Redis缓存
 
+**总体流程**
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251127210950929.png)
+
+**业务流程**
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251127211013223.png)
+
+操作思路：查询数据库之前先查询缓存，如果缓存数据存在，则直接从缓存中返回，如果缓存数据不存在，再查询数据库，然后将数据存入redis并将数据返回。
+
+key设计为 “固定前缀+商铺id”的形式。
 
 
+```java [ShopServiceImpl.java]
+    private final RedisTemplate<String, Object> redisTemplate;
+
+    @Override
+    public Result queryShopById(Long id) {
+        String shopJson = (String) redisTemplate.opsForValue().get(RedisConstants.CACHE_SHOP_KEY + id);
+        if (StrUtil.isNotBlank(shopJson)) {
+            Shop shop = JSON.parseObject(shopJson, Shop.class);
+            return Result.ok(shop);
+        }
+
+        Shop shop = getById(id);
+        if (ObjectUtil.isEmpty(shop)) {
+            return Result.ok();
+        }
+        redisTemplate.opsForValue().set(RedisConstants.CACHE_SHOP_KEY + id, JSON.toJSONString(shop));
+
+        return Result.ok(shop);
+    }
+```
+
+首页查询做缓存：
+
+**List做缓存**
+```java [ShopTypeServiceImpl.java]
+    private final RedisTemplate<String, Object> redisTemplate;
+
+    @Override
+    public Result queryTypeList() {
+        List<Object> shopTypeListCache = redisTemplate.opsForList().range("cache:shopType", 0L, -1L);
+        if (!shopTypeListCache.isEmpty()) {
+            return Result.ok(shopTypeListCache);
+        }
+        List<ShopType> typeList = lambdaQuery()
+                .orderByAsc(ShopType::getSort)
+                .list();
+        if (typeList.isEmpty()) {
+            return Result.ok();
+        }
+        redisTemplate.opsForList().rightPushAll("cache:shopType", typeList.toArray());
+        return Result.ok(typeList);
+    }
+```
+:::info
+`typeList.toArray()` 变成 `ShopType[]` 数组，`rightPushAll(ShopType[] array)` 会把数组中的每一个元素逐个写入 Redis;
+
+如果是`redisTemplate.opsForList().rightPushAll("cache:shopType", typeList);`
+
+ `rightPushAll(Collection<?> c)` 会把整个集合当作一个元素推入 Redis 列表，得到的将会是(这样是不对的)
+ ```json
+[
+  [ShopType1, ShopType2, ShopType3 ...]
+]
+ ```
+:::
 
 
 
 ### 缓存更新策略
+
+|          | **内存淘汰**                                                                 | **超时剔除**                                                                                         | **主动更新**                                                                 |
+|----------|------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| **说明** | 不用自己维护，利用Redis的内存淘汰机制，当内存不足时自动淘汰部分数据。下次查询时更新缓存。 | 给缓存数据添加TTL时间，到期后自动删除缓存。下次查询时更新缓存。       | 编写业务逻辑，在修改数据库的同时，更新缓存。                                     |
+| **一致性** | 差                        | 一般                          | 好                                                                           |
+| **维护成本** | 无                       | 低                          | 高                         |
+|          | 淘汰哪部分数据和淘汰的时机无法确定，如果旧数据一直为被淘汰，会造成数据的不一致                     | 一致性的强弱取决于所设置TTL的长短，同时如果在所设置的更新时间内发生数据更新，还是会造成数据的不一致           | 更新可控性高，但需要编写额外业务逻辑                                           |
 
 
 

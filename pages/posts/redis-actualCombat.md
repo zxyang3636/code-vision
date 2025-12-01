@@ -610,7 +610,116 @@ key设计为 “固定前缀+商铺id”的形式。
   - 先写数据库，然后再删除缓存
   - 要确保数据库与缓存操作的原子性
 
+
+
+### 实现商铺缓存
+
+查询这里增加时间
+```java
+redisTemplate.opsForValue().set(RedisConstants.CACHE_SHOP_KEY + id, JSON.toJSONString(shop), 30L, TimeUnit.MINUTES);
+```
+更新商品逻辑：
+```java
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Result updateShop(Shop shop) {
+        Long id = shop.getId();
+        if (id == null) {
+            return Result.fail("id不能为空");
+        }
+        // 更新数据库
+        updateById(shop);
+        // 删除缓存
+        redisTemplate.delete(RedisConstants.CACHE_SHOP_KEY + id);
+        return Result.ok();
+    }
+```
+
+
+
+
 ### 缓存穿透
+
+**缓存穿透**指客户端请求的数据在缓存中和数据库中都不存在，这样缓存永远不会生效，这些请求都会打到数据库。
+
+常见解决方案有两种：
+
+
+1. 缓存空对象
+
+当我们发现请求的数据即不存在于缓存，也不存于与数据库时，将空值缓存到Redis，并设置过期时间，避免频繁查询数据库。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201214207173.png)
+
+
+优点：
+
+- 实现简单，维护⽅便
+
+缺点：
+
+- 额外的内存消耗；可能发生不一致问题（在TTL内真的有对应数据存入数据库中）
+
+假如用户刚好请求了一个id，但是这个id的数据不存在，我们给缓存了个null，就在此时我们真的给这个id插入了一条数据，但是缓存中缓存的是null，出现了数据不一致的问题。
+
+我们可以在新增数据的时候，我们主动把redis中的数据进行覆盖掉，也可以解决这个问题。
+
+
+2. 布隆过滤
+
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201214639408.png)
+
+- 优点：内存占用较少，没有多余key
+- 缺点：
+    - 实现复杂
+    - 存在误判可能
+
+
+**解决缓存穿透问题**
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201215707349.png)
+
+```java [ShopServiceImpl.java]
+    private final RedisTemplate<String, Object> redisTemplate;
+
+    @Override
+    public Result queryShopById(Long id) {
+        String shopJson = (String) redisTemplate.opsForValue().get(RedisConstants.CACHE_SHOP_KEY + id);
+        if (StrUtil.isNotBlank(shopJson)) {
+            Shop shop = JSON.parseObject(shopJson, Shop.class);
+            return Result.ok(shop);
+        }
+        // 命中的是否是空值
+        if (shopJson != null) {
+            return Result.fail("店铺不存在");
+        }
+        Shop shop = getById(id);
+        if (ObjectUtil.isEmpty(shop)) {
+            // 缓存空值到redis
+            redisTemplate.opsForValue().set(RedisConstants.CACHE_SHOP_KEY + id, "", 2L, TimeUnit.MINUTES);
+            return Result.fail("店铺不存在");
+        }
+        redisTemplate.opsForValue().set(RedisConstants.CACHE_SHOP_KEY + id, JSON.toJSONString(shop), 30L, TimeUnit.MINUTES);
+
+        return Result.ok(shop);
+    }
+```
+
+**总结**
+
+缓存穿透产生的原因是什么？
+
+- 用户请求的数据在缓存中和数据库中都不存在，不断发起这样的请求，给数据库带来巨大压力
+
+缓存穿透的解决方案有哪些？
+
+- 缓存 null 值
+- 布隆过滤
+- 增强 id 的复杂度，避免被猜测 id 规律
+- 做好数据的基础格式校验
+- 加强用户权限校验
+- 做好热点参数的限流
 
 
 
@@ -619,12 +728,167 @@ key设计为 “固定前缀+商铺id”的形式。
 
 ### 缓存雪崩
 
+缓存雪崩是指在同⼀时段 **⼤量的缓存key同时失效** 或者 **Redis服务宕机**，导致⼤量请求到达数据库，带来巨⼤压⼒。
 
+与缓存击穿的区别：雪崩是很多key，击穿是某一个key缓存。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201221150009.png)
+
+
+
+常见的解决方案有：
+
+- 由于设置缓存时采用了相同的过期时间，导致缓存在某一时刻同时失效。因此**给不同的Key在原本TTL的基础上添加随机值**，这样KEY的过期时间不同，不会大量KEY同时过期
+- 利用Redis集群提高服务的可用性，避免缓存服务宕机
+- 给缓存业务添加降级限流策略（服务降级、快速失败等）
+- 给业务添加多级缓存，比如先查询本地缓存，本地缓存未命中再查询Redis，Redis未命中再查询数据库。
 
 
 
 
 ### 缓存击穿
+
+**缓存击穿问题**也叫热点Key问题，就是⼀个被 **⾼并发访问** 并且 **缓存重建业务较复杂** 的key突然失效了，⽆数的请求访问会在瞬间给数据库带来巨⼤的冲击。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201222938789.png)
+
+解决方案：
+
+- 互斥锁：给重建缓存逻辑加锁，避免多线程同时进行
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201223154715.png)
+
+当线程1发现缓存过期并尝试重建缓存时，首先获取互斥锁，再查询数据库并写入缓存，之后释放锁。在重建过程中，有其他线程也发现缓存过期并尝试重建时，会获取互斥锁失败，休眠一会再尝试查询缓存和获取锁的操作，直到查询到新的缓存数据时直接返回。
+
+
+- 逻辑过期：热点key不要设置过期时间，通过逻辑过期字段标识是否过期。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201223611034.png)
+
+当一个线程发现缓存已经过期时，获取互斥锁进行缓存重建，与前一种方案不同的是，缓存重建时会创建新的线程去完成，重建完成后释放互斥锁，自己直接返回过期数据。在重建缓存过程中，有新线程发现缓存过期并尝试重建时，会获取锁失败，此时直接返回过期数据。
+
+
+**对比**
+
+| 解决方案 | 优点 | 缺点 |
+|---------|------|------|
+| **互斥锁** | • 没有额外的内存消耗<br>• 保证一致性<br>• 实现简单 | • 线程需要等待，性能受影响<br>• 可能有死锁风险 |
+| **逻辑过期** | • 线程无需等待，性能较好 | • 不保证一致性<br>• 有额外内存消耗<br>• 实现复杂 |
+
+
+- 互斥锁不需要保存逻辑过期时间，没有额外的内存消耗，而逻辑过期需要额外维护一个逻辑过期时间，有额外的内存消耗。
+
+互斥锁能够保证数据的强一致性，但由于锁的存在会降低并发性能；逻辑过期的方式优先保障高可用，性能好，但存在数据不一致情况。根据项目的实际需要选择合适的解决方案
+
+
+
+---
+
+**利用互斥锁解决店铺详情查询的缓存击穿问题**
+
+需求：修改根据id查询商铺的业务，基于互斥锁方式来解决缓存击穿问题
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251201233027840.png)
+
+我们可以利用setnx来实现互斥锁，setnx添加成功则返回1，添加失败则返回0；释放锁可以利用 `del xxx`来释放锁，当然我们使用setnx要注意**给key设置过期时间**，避免程序出现问题，导致锁永远无法释放，一般设置个10s足够了，业务重建缓存时间顶天1s不到；
+
+**实现思路：**
+
+进行查询之后，如果从缓存没有查询到数据，则进行互斥锁的获取（构建缓存）
+
+1. 若获取锁成功，则再次检测redis缓存是否存在，做DoubleCheck，如果存在则无需重建缓存，如果不存在则查询数据库重建缓存。
+- 对于第一次获取就得到互斥锁的线程而言，再次检测redis缓存，结果还是不存在，然后重建缓存。
+- 对于上次获得锁失败的线程而言，本次获取锁成功，说明已经有线程完成缓存重建，再次查询缓存即可获得数据，不用再执行重建缓存操作。
+
+2. 若没有获取到互斥锁，则自旋等待一段时间后再次尝试获取锁，获取成功则回到 第1步；
+
+```java
+    @Override
+    public Result queryShopById(Long id) {
+        String shopJson = (String) redisTemplate.opsForValue().get(RedisConstants.CACHE_SHOP_KEY + id);
+        if (StrUtil.isNotBlank(shopJson)) {
+            Shop shop = JSON.parseObject(shopJson, Shop.class);
+            return Result.ok(shop);
+        }
+        // 命中的是否是空值
+        if (shopJson != null) {
+            return Result.fail("店铺不存在");
+        }
+        // 实现缓存重建
+        // 获取互斥锁
+        String lockKey = "lock:shop:" + id;
+        boolean isLocked = tryLock(lockKey);
+        // 是否获取成功
+        if (!isLocked) {
+            // 失败-休眠重试
+            ThreadUtil.sleep(50);
+            return queryShopById(id);  // 递归重试
+        }
+        // Double-Check：第二次检查缓存
+        shopJson = (String) redisTemplate.opsForValue().get(RedisConstants.CACHE_SHOP_KEY + id);
+        if (StrUtil.isNotBlank(shopJson)) {
+            Shop shop = JSON.parseObject(shopJson, Shop.class);
+            return Result.ok(shop);
+        }
+        if (shopJson != null) {
+            return Result.fail("店铺不存在");
+        }
+        // 缓存仍未命中，查数据库
+        Shop shop = getById(id);
+        if (ObjectUtil.isEmpty(shop)) {
+            // 缓存空值到redis,防止穿透
+            redisTemplate.opsForValue().set(RedisConstants.CACHE_SHOP_KEY + id, "", 2L, TimeUnit.MINUTES);
+            return Result.fail("店铺不存在");
+        }
+        redisTemplate.opsForValue().set(RedisConstants.CACHE_SHOP_KEY + id, JSON.toJSONString(shop), 30L, TimeUnit.MINUTES);
+        // 释放互斥锁
+        unLock(lockKey);
+        return Result.ok(shop);
+    }
+
+
+    private boolean tryLock(String key) {
+        // 只有当 key 不存在时，才会设置 value，并返回 true; 如果 key 已经存在，则不会进行任何修改，并返回 false。
+        Boolean flag = redisTemplate.opsForValue().setIfAbsent(key, "1", 10L, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);    // isTrue:只有当flag是true才是true，flag为false和null都返回false(避免拆箱操作报空指针)
+    }
+
+    private void unLock(String key) {
+        redisTemplate.delete(key);
+    }
+```
+
+:::tip
+**为什么需要 double check？**
+
+当多个线程同时进入查询方法时，可能会发生：
+
+1. A 线程发现缓存没有，去尝试加锁。
+
+2. B 线程也发现缓存没有，但 A 拿到锁，B 没拿到锁。
+
+3. B 休眠后继续重试，但此时 A 已经把最新数据写入缓存了。
+
+4. 如果没有 double check，B 又会继续走完整流程 —— 白查数据库，造成竞争。
+
+所以加锁之后必须再查一次缓存（第二次检查），避免重复构建缓存，减少数据库压力。
+
+
+这样可以保证：
+
+1. 如果别人已经重建缓存，我们不用再查数据库
+
+2. 避免多线程重复重建缓存
+
+3. 性能更优，更安全
+:::
+
+
+
+---
+
+**基于逻辑过期方式解决缓存击穿问题**
+
+
 
 
 
@@ -632,6 +896,8 @@ key设计为 “固定前缀+商铺id”的形式。
 
 
 ### 缓存工具封装
+
+
 
 
 

@@ -1366,19 +1366,176 @@ public Result queryShopById(Long id) {
 - 时间戳：31bit，以秒为单位，可以使用69年
 - 序列号：32bit，秒内的计数器，支持每秒产生2^32个不同ID
 
+
+
+工具类
+```java
+@Component
+@RequiredArgsConstructor
+public class RedisIdWorker {
+
+
+    private final RedisTemplate<String, Object> redisTemplate;
+
+    private static final long BEGIN_TIMESTAMP = 1640995200L;
+
+    /**
+     * 序列号位数
+     */
+    private static final int COUNT_BITS = 32;
+
+    /**
+     * 生成全局唯一ID
+     *
+     * @param keyPerfix 相关业务的ID前缀
+     * @return
+     */
+    public long nextId(String keyPerfix) {
+        // 生成时间戳
+        LocalDateTime now = LocalDateTime.now();
+        long nowSecond = now.toEpochSecond(ZoneOffset.UTC);
+        long timestamp = nowSecond - BEGIN_TIMESTAMP;
+        // 生成序列号
+        String date = now.format(DateTimeFormatter.ofPattern("yyyy:MM:dd"));
+        Long count = redisTemplate.opsForValue().increment("icr:" + keyPerfix + ":" + date); // redis自增长的值是有上限的，是2^64
+
+        return timestamp << COUNT_BITS | count;
+    }
+
+}
+```
+
+测试
+
+创建含有300个线程的线程池，每个线程使用Reids的id生成器生成100个id，统计用时。
+
+```java
+    @Resource
+    private RedisIdWorker idWorker;
+
+    private ExecutorService es = Executors.newFixedThreadPool(300);
+
+    @Test
+    void testIdWorker() throws InterruptedException {
+        CountDownLatch latch = new CountDownLatch(300);
+
+        Runnable task = () -> {
+            for (int i = 0; i < 100; i++) {
+                long id = idWorker.nextId("order");
+                System.out.println("id = " + id);
+            }
+            latch.countDown();
+        };
+
+        long begin = System.currentTimeMillis();
+        for (int i = 0; i < 300; i++) {
+            es.submit(task);
+        }
+        latch.await();
+        long end = System.currentTimeMillis();
+        System.out.println("time = " + (end - begin));
+    }
+```
+
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203222352286.png)
+
+耗时1秒多，与机器性能有关
+
+
+
+
+
 ### 实现优惠券秒杀下单
 
 
+秒杀券下单时需要判断两点：
 
+- 秒杀是否开始或结束，如果尚未开始或已经结束则无法下单
+- 库存是否充足，不足则无法下单
 
+具体流程如下：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203230558459.png)
+
+**下单功能**
+```java
+@Service
+@RequiredArgsConstructor
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+
+    private final ISeckillVoucherService seckillVoucherService;
+
+    private final RedisIdWorker redisIdWorker;
+
+    @Override
+    @Transactional(timeout = 5000, rollbackFor = Exception.class)
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        boolean flag = seckillVoucherService.update().setSql("stock = stock - 1")
+                .eq("voucher_id", voucherId)
+                .update();
+        if (!flag) {
+            return Result.fail("扣减失败");
+        }
+        // 创建订单
+        long orderId = redisIdWorker.nextId("order");
+        VoucherOrder voucherOrder = VoucherOrder.builder()
+                .id(orderId)
+                .userId(UserHolder.getUser().getId())
+                .voucherId(voucherId)
+                .build();
+        save(voucherOrder);
+        // 返回订单id
+        return Result.ok(orderId);
+    }
+}
+```
 
 
 
 
 ### 超卖问题
 
+理想情况：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203233615194.png)
+
+错误分析：
+
+​ 假设线程1过来查询库存，判断出来库存大于1，正准备去扣减库存，但是还没有来得及去扣减，此时线程2过来，线程2也去查询库存，发现这个数量一定也大于1，那么这两个线程都会去扣减库存，最终多个线程相当于一起去扣减库存，此时就会出现库存的超卖问题。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203233809995.png)
+
+超卖问题是典型的多线程安全问题，针对这一问题的常见解决方案就是加锁：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203234120503.png)
 
 
+乐观锁的关键是判断之前查询得到的数据是否有被修改过，常见的方式有两种：
+
+- 版本号法
+
+给数据添加一个版本version字段，当数据修改时version加一，基于version字段判断有没有被修改过。每一次更新都必须满足**更新前的 version == 当前数据库中的 version**
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203234513563.png)
+
+
+- CAS法
+
+用**数据本身是否发生变化**判断线程是否安全（比如库存数量）
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251203235054427.png)
 
 
 

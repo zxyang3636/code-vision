@@ -2340,3 +2340,133 @@ public class UserOrderService {
 
 **注意事项**
 - `PageHelper.startPage()` 必须紧跟第一个查询
+
+
+# 统一返回类封装
+```java
+/**
+ * 统一返回结果封装类
+ *
+ * @author zzy
+ * @date 2025/12/4
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Result<T> implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * 状态码：200-成功，500-失败
+     */
+    private Integer code;
+
+    /**
+     * 返回消息
+     */
+    private String message;
+
+    /**
+     * 返回数据
+     */
+    private T data;
+
+    /**
+     * 成功返回（带数据）
+     *
+     * @param data 返回的数据
+     * @param <T>  数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> ok(T data) {
+        return new Result<>(200, "操作成功", data);
+    }
+
+    /**
+     * 成功返回（无数据）
+     *
+     * @param <T> 数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> ok() {
+        return new Result<>(200, "操作成功", null);
+    }
+
+    /**
+     * 成功返回（自定义消息）
+     *
+     * @param message 自定义消息
+     * @param <T>     数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> ok(String message) {
+        return new Result<>(200, message, null);
+    }
+
+    /**
+     * 成功返回（自定义消息和数据）
+     *
+     * @param message 自定义消息
+     * @param data    返回的数据
+     * @param <T>     数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> ok(String message, T data) {
+        return new Result<>(200, message, data);
+    }
+
+    /**
+     * 失败返回（带错误消息）
+     *
+     * @param message 错误消息
+     * @param <T>     数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> fail(String message) {
+        return new Result<>(500, message, null);
+    }
+
+    /**
+     * 失败返回（带错误消息和数据）
+     *
+     * @param message 错误消息
+     * @param data    返回的数据
+     * @param <T>     数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> fail(String message, T data) {
+        return new Result<>(500, message, data);
+    }
+
+    /**
+     * 失败返回（自定义状态码和消息）
+     *
+     * @param code    状态码
+     * @param message 错误消息
+     * @param <T>     数据类型
+     * @return Result对象
+     */
+    public static <T> Result<T> fail(Integer code, String message) {
+        return new Result<>(code, message, null);
+    }
+
+    /**
+     * 判断是否成功
+     *
+     * @return true-成功，false-失败
+     */
+    public boolean isSuccess() {
+        return this.code != null && this.code == 200;
+    }
+
+    /**
+     * 判断是否失败
+     *
+     * @return true-失败，false-成功
+     */
+    public boolean isFail() {
+        return !isSuccess();
+    }
+}
+```

@@ -1539,18 +1539,404 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
 
 
+**乐观锁解决超卖**
 
+```java
+    private final ISeckillVoucherService seckillVoucherService;
+
+    private final RedisIdWorker redisIdWorker;
+
+    @Override
+    @Transactional(timeout = 5000, rollbackFor = Exception.class)
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        // 扣减库存
+        boolean flag = seckillVoucherService.update().setSql("stock = stock - 1")   // set stock = stock - 1
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)  // where id = ? and stock > 0
+                .update();
+        if (!flag) {
+            return Result.fail("扣减失败");
+        }
+        // 创建订单
+        long orderId = redisIdWorker.nextId("order");
+        VoucherOrder voucherOrder = VoucherOrder.builder()
+                .id(orderId)
+                .userId(UserHolder.getUser().getId())
+                .voucherId(voucherId)
+                .build();
+        save(voucherOrder);
+        // 返回订单id
+        return Result.ok(orderId);
+    }
+```
+
+超卖这样的线程安全问题，解决方案有哪些？
+
+1. 悲观锁：添加同步锁，让线程串行执行
+   - 优点：简单粗暴
+   - 缺点：性能一般
+
+2. 乐观锁：不加锁，在更新时判断是否有其它线程在修改
+   - 优点：性能好
+   - 缺点：存在成功率低的问题 (`where id = ? and stock > 0`)
 
 ### 一人一单
 
+需求：修改秒杀业务，要求同一个优惠券，一个用户只能下一单
+
+具体逻辑如下：首先查询优惠券，判断当前时间是否处于秒杀阶段，再进一步判断库存是否足够，然后再根据优惠卷id和用户id查询是否已经下过这个订单，如果下过这个订单，则不再下单，否则进行下单。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251208220800540.png)
+
+在JMeter多线程环境下测试，同样会出现线程安全的问题，多个线程第一次下单时，同时查询到当前不存在订单，然后各自去下单，还是会出现一个用户下了多个订单的情况。
+
+这里没法使用乐观锁，因为数据根本就不存在，没法判断是否被修改过，我们要判断的是*是否存在*，只能用悲观锁方案；
 
 
+**加锁的粒度**
+
+首先把从验证一人一单 到 添加优惠券订单的逻辑抽取到一个方法createVoucherOrder中，在这个方法中进行查询订单、扣减库存并完成订单添加。
 
 
+```java
+    @Override
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        Long userId = UserHolder.getUser().getId();
+        return createVoucherOrder(voucherId, userId);
+    }
+
+    @Transactional(timeout = 5000, rollbackFor = Exception.class)
+    public synchronized Result createVoucherOrder(Long voucherId, Long userId) {    // 锁的对象是this
+        // 一人一单
+        Integer count = lambdaQuery()
+                .eq(VoucherOrder::getUserId, userId)
+                .eq(VoucherOrder::getVoucherId, voucherId)
+                .count();
+        if (count > 0) {
+            // 用户至少下过一单
+            return Result.fail("已经购买过了");
+        }
+        // 扣减库存
+        boolean flag = seckillVoucherService.update().setSql("stock = stock - 1")   // set stock = stock - 1
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)  // where id = ? and stock > 0
+                .update();
+        if (!flag) {
+            return Result.fail("库存不足");
+        }
+        // 创建订单
+        long orderId = redisIdWorker.nextId("order");
+        VoucherOrder voucherOrder = VoucherOrder.builder()
+                .id(orderId)
+                .userId(userId)
+                .voucherId(voucherId)
+                .build();
+        save(voucherOrder);
+        // 返回订单id
+        return Result.ok(orderId);
+    }
+```
+如果在这个方法上加锁，在同一时刻只有一个线程可以执行该方法，每个线程对这个方法的访问变成了串行方式，性能降低。
+加锁的初衷是为了解决**同一个用户**的线程安全问题，而不同用户应该互不受影响。因此需要降低锁的粒度，同一个用户加一把锁，不同用户加不同的锁，故可以对用户的id加锁。
+（同一个用户才需要去判断并发安全问题，如果不是同一个用户不需要加锁）
+
+
+:::info
+为什么要用 `synchronized (userId.toString().intern())`
+
+目的：让同一个 userId 的操作串行执行，不同 userId 并行执行 (单机环境下，以 userId 为粒度的本地同步锁，使同一个 userId 的操作串行化)
+- 同一个用户请求，只允许一个线程进入同步块
+- 不同用户之间互不影响，可以同时执行。
+
+```java
+    @Override
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        return createVoucherOrder(voucherId);
+    }
+
+    @Transactional(timeout = 5000, rollbackFor = Exception.class)
+    public Result createVoucherOrder(Long voucherId) {
+        Long userId = UserHolder.getUser().getId();
+        synchronized (userId.toString().intern()) {
+            // 一人一单
+            Integer count = lambdaQuery()
+                    .eq(VoucherOrder::getUserId, userId)
+                    .eq(VoucherOrder::getVoucherId, voucherId)
+                    .count();
+            if (count > 0) {
+                // 用户至少下过一单
+                return Result.fail("已经购买过了");
+            }
+            // 扣减库存
+            boolean flag = seckillVoucherService.update().setSql("stock = stock - 1")   // set stock = stock - 1
+                    .eq("voucher_id", voucherId)
+                    .gt("stock", 0)  // where id = ? and stock > 0
+                    .update();
+            if (!flag) {
+                return Result.fail("库存不足");
+            }
+            // 创建订单
+            long orderId = redisIdWorker.nextId("order");
+            VoucherOrder voucherOrder = VoucherOrder.builder()
+                    .id(orderId)
+                    .userId(userId)
+                    .voucherId(voucherId)
+                    .build();
+            save(voucherOrder);
+            // 返回订单id
+            return Result.ok(orderId);
+        }
+    }
+```
+
+**如果不加 intern()，会出什么问题？**
+
+```java
+synchronized (userId.toString())
+```
+虽然两次生成的字符串内容相等，但不是同一个对象，因为是 new 出来的不同实例，这样锁根本不生效
+
+而`intern()` 返回的是字符串常量池的同一个对象，JVM 会检查 字符串常量池（String Pool）里是否已经存在一个与 "xxx" 内容相同的字符串，如果存在：返回池中该字符串的引用，如果不存在：将 “xxx” 的字符串内容放入池中，并返回池中的引用
+
+:::
+
+现在的逻辑是，先释放锁，再提交事务，这个事务是被Spring管理的，锁释放后意味着其他线程可以进来了，如果此时事物尚未提交，如果有线程进来查询订单了，而上一个订单还未写入数据库，此时查询订单就会发现不存在，然后再去创建订单，这就导致了订单重复的问题，依然存在并发安全问题；
+
+所以我们应该是事物提交后再去释放锁，所以我们应该把锁放在这里;
+```java
+@Service
+@RequiredArgsConstructor
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+
+    private final ISeckillVoucherService seckillVoucherService;
+
+    private final RedisIdWorker redisIdWorker;
+
+    @Override
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        Long userId = UserHolder.getUser().getId();
+        synchronized (userId.toString().intern()) {
+            // 获取代理对象
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+    }
+
+    @Transactional(timeout = 5000, rollbackFor = Exception.class)
+    public Result createVoucherOrder(Long voucherId) {
+        Long userId = UserHolder.getUser().getId();
+        // 一人一单
+        Integer count = lambdaQuery()
+                .eq(VoucherOrder::getUserId, userId)
+                .eq(VoucherOrder::getVoucherId, voucherId)
+                .count();
+        if (count > 0) {
+            // 用户至少下过一单
+            return Result.fail("已经购买过了");
+        }
+        // 扣减库存
+        boolean flag = seckillVoucherService.update().setSql("stock = stock - 1")   // set stock = stock - 1
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)  // where id = ? and stock > 0
+                .update();
+        if (!flag) {
+            return Result.fail("库存不足");
+        }
+        // 创建订单
+        long orderId = redisIdWorker.nextId("order");
+        VoucherOrder voucherOrder = VoucherOrder.builder()
+                .id(orderId)
+                .userId(userId)
+                .voucherId(voucherId)
+                .build();
+        save(voucherOrder);
+        // 返回订单id
+        return Result.ok(orderId);
+
+    }
+}
+```
+
+
+:::tip
+
+**如何让事务生效？**
+
+**添加依赖**
+```xml
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+```
+
+**启动类**打上注解
+```java
+@EnableAspectJAutoProxy(exposeProxy = true)
+```
+
+**接口加上**
+```java [IVoucherOrderService.java]
+Result createVoucherOrder(Long voucherId);
+```
+
+```java [VoucherOrderServiceImpl.java]
+        synchronized (userId.toString().intern()) {
+            // 获取代理对象
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+```
+:::
+
+---
+
+**一人一单的并发安全问题 (分布式失效)**
+
+通过加锁可以解决在单机情况下的一人一单安全问题，但是在集群模式下就不行了。
+
+1．我们将服务启动两份，端口分别为8081和8082;
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251208232217486.png)
+
+2. 然后修改nginx的conf目录下的nginx.conf文件，配置反向代理和负载均衡;
+
+```c
+worker_processes  1;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/json;
+
+    sendfile        on;
+    
+    keepalive_timeout  65;
+
+    server {
+        listen       8080;
+        server_name  localhost;
+        # 指定前端项目所在的位置
+        location / {
+            root   html/hmdp;
+            index  index.html index.htm;
+        }
+
+        error_page   500 502 503 504  /50x.html;
+        location = /50x.html {
+            root   html;
+        }
+
+
+        location /api {  
+            default_type  application/json;
+            #internal;  
+            keepalive_timeout   30s;  
+            keepalive_requests  1000;  
+            #支持keep-alive  
+            proxy_http_version 1.1;  
+            rewrite /api(/.*) $1 break;  
+            proxy_pass_request_headers on;
+            #more_clear_input_headers Accept-Encoding;  
+            proxy_next_upstream error timeout;  
+            #proxy_pass http://127.0.0.1:8081;
+            proxy_pass http://backend;
+        }
+    }
+
+    upstream backend {
+        server 127.0.0.1:8081 max_fails=5 fail_timeout=10s weight=1;
+        server 127.0.0.1:8082 max_fails=5 fail_timeout=10s weight=1;
+    }  
+}
+
+```
+
+```bash
+# win
+nginx.exe -s reload
+```
+
+
+现在，用户请求会在这两个节点上负载均衡，再次测试下是否存在线程安全问题。
+
+
+启动两端口的服务，使用同一个用户下两次单，在锁内部打上断点，debug结果如下：同一个用户在不同端口的服务上都成功获取到了锁，都可以进行下单操作。
+
+
+正常理想情况：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251208233531987.png)
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251208233659701.png)
+
+集群问题：
+
+在集群模式下或分布式系统，有多个JVM的存在，每个JVM内部都有自己的锁，导致每一个锁都有一个线程获取，就出现了并行运行；
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251208234023072.png)
 
 
 
 ### 分布式锁
+
 
 
 

@@ -1937,12 +1937,268 @@ nginx.exe -s reload
 
 ### 分布式锁
 
+#### 分布式锁的实现方案
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251209205026567.png)
+
+**什么是分布式锁**
+
+分布式锁：满足分布式系统或集群模式下多进程可见并且互斥的锁。
+
+- 可见性：多个jvm都能看到相同的结果。
+- 互斥：不管谁来访问，只能有一个人能拿到。
+- 高可用：大多数情况来获取锁都是成功的，不能说获取锁的时候经常出现问题。
+- 高性能(高并发)：由于加锁本身就让性能降低，如果获取锁的动作又很慢，那么就太慢了，所以获取锁的动作必须高性能。
+- 安全性：考虑异常的情况，比如获取锁成功了，但是还没有释放锁，程序异常了怎么办（可能死锁）。
+
+
+**分布式锁的实现方案**
+
+分布式锁的核心是实现多进程之间互斥，而满足这一点的方式有很多，常见的有三种：
+
+- mysql: 利用事务机制获取锁，如果有异常，事务就会回滚，则释放了锁；
+- redis: 利用redis的setnx命令获取锁，如果setnx成功，则获取锁，否则获取锁失败；释放锁即使把这个key删掉，其他人就能继续获取锁了，为了在服务出现故障后仍能自动释放锁，需要在添加key的时候设置过期时间(需要考虑看门狗)；可用性也是很好既支持主从也支持集群；
+
+
+| 特性       | MySQL                                | Redis                                  | Zookeeper                              |
+|------------|--------------------------------------|----------------------------------------|----------------------------------------|
+| **互斥**   | 利用mysql本身的互斥锁机制            | 利用setnx这样的互斥命令                | 利用节点的唯一性和有序性实现互斥       |
+| **高可用** | 好                                   | 好                                     | 好                                     |
+| **高性能** | 一般                                 | 好                                     | 一般                                   |
+| **安全性** | 断开连接，自动释放锁                 | 利用锁超时时间，到期释放               | 临时节点，断开连接自动释放             |
 
 
 
+#### 利用Redis实现分布式锁
+
+实现分布式锁时需要实现的两个基本方法：
+
+- **获取锁**：
+  - 互斥：确保只能有一个线程获取锁
+  - 非阻塞：尝试一次，成功返回true，失败返回false
+    ```bash
+    # 添加锁，利用setnx的互斥特性
+    SETNX lock thread1
+
+    # 添加锁过期时间，避免服务岩机引起的死锁（过期时间要比业务时间长，否则业务没执行完锁就自动释放了）
+    EXPIRE lock 10
+
+    # 并且我们需要保证setnx和expire是原子操作，要么都成功要么都失败；
+    # 不能分两步执行（先 SETNX 再 EXPIRE），因为在这两个命令之间如果发生进程崩溃、网络中断等故障，会导致锁没有设置过期时间，从而引发死锁。
+    # 命令格式：
+    SET key value NX EX seconds
+    # 比如：
+    SET lock:shop101 thread-001 NX EX 30
+
+    # NX → 仅当 key 不存在时才设置（相当于 SETNX）
+    # EX seconds → 设置 key 的过期时间（秒）
+    ```
+
+- **释放锁**：
+  - 手动释放
+  - 超时释放：获取锁时添加一个超时时间
+  
+    ```bash
+    # 释放锁，删除即可
+    DEL key
+    ```
+
+流程：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251209215146930.png)
+
+
+---
+
+**基于Redis实现分布式锁初级版本**
+
+需求：定义一个类，实现下面接口，利用Redis实现分布式锁功能。
+```java
+public interface ILock {
+
+    /**
+     * 尝试获取锁
+     * @param timeoutSec 锁持有的超时时间，过期后自动释放
+     * @return true代表获取锁成功；false代表获取锁失败
+     */
+    boolean tryLock(long timeoutSec);
+
+    /**
+     * 释放锁
+     */
+    void unlock();
+}
+```
+
+
+实现：
+
+```java
+public class SimpleRedisLock implements ILock {
+
+    private RedisTemplate<String, Object> redisTemplate;
+    private String name;
+
+    private static final String KEY_PREFIX = "lock:";
+
+    public SimpleRedisLock(RedisTemplate<String, Object> redisTemplate, String name) {
+        this.redisTemplate = redisTemplate;
+        this.name = name;
+    }
+
+
+    @Override
+    public boolean tryLock(long timeoutSec) {
+        long threadId = Thread.currentThread().getId();
+        Boolean flag = redisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId + "", timeoutSec, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);
+    }
+
+    @Override
+    public void unlock() {
+        redisTemplate.delete(KEY_PREFIX + name);
+    }
+}
+```
+
+
+*修改业务逻辑*
+```java
+    @Override
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        Long userId = UserHolder.getUser().getId();
+        // 创建锁对象
+        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(redisTemplate, "order:" + userId);
+        boolean flag = simpleRedisLock.tryLock(1000);
+        if (!flag) {
+            // 获取锁失败
+            return Result.fail("不允许重复下单");
+        }
+        try {
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            // 释放锁
+            simpleRedisLock.unlock();
+        }
+    }
+```
+
+---
+
+**Redis分布式锁误删问题**
+
+*问题说明：*
+- 持有锁的线程1在锁的内部出现了阻塞，导致他的锁TTL到期，自动释放
+- 此时线程2也来尝试获取锁，由于线程1已经释放了锁，所以线程2可以拿到
+- 但是现在线程1阻塞完了，继续往下执行，要开始释放锁了
+- 那么此时就会将属于线程2的锁释放，这就是误删别人锁的情况
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251209232048463.png)
+
+
+有一些问题：
+- 业务阻塞，导致锁提前释放
+- 释放锁时，把别人的锁释放了（锁误删）
+
+释放锁时应该做一个判断，解决方案就是在每个线程释放锁的时候，都判断一下这个锁是不是自己的，如果不属于自己，则不进行删除操作。
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251209232431633.png)
+
+所以正确流程应该是：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251209232533374.png)
 
 
 
+**解决Redis分布式锁误删问题**
+
+1. 在获取锁时存入线程标示（可以用UUID表示）
+
+2. 在释放锁时先获取锁中的线程标示，判断是否与当前线程标示一致
+   - 如果一致则释放锁
+   - 如果不一致则不释放锁
+
+*完善后：*
+
+key：KEY_PREFIX + name，key的前缀KEY_PREFIX = "lock:"，再根据当前的业务名称传入name，二者拼接起来作为key，让不同的业务获取不同的锁。
+
+value：应设置成当前线程的唯一标识，防止因线程阻塞导致锁自动释放后再去执行释放锁操作，将别的线程锁设置的锁误删。此处的唯一标识设置为**UUID + 线程id**的形式，当要主动释放锁时，先获取对应的value值，判断与自己的唯一标识是否相同，相同则删除该key释放锁，否则不用处理。
+
+> 当前线程的id不能作为线程的唯一标识。每个JVM实例都会为在其内部创建的每个线程分配一个唯一的标识符（通常是一个递增的长整型数字）。当有多个JVM实例运行时，每个JVM实例的线程标识符空间是独立的，所以不同JVM实例中的线程可能会有相同的标识符。
+
+
+
+```java
+public class SimpleRedisLock implements ILock {
+
+    private RedisTemplate<String, Object> redisTemplate;
+    private String name;
+
+    private static final String KEY_PREFIX = "lock:";
+    private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
+
+    public SimpleRedisLock(RedisTemplate<String, Object> redisTemplate, String name) {
+        this.redisTemplate = redisTemplate;
+        this.name = name;
+    }
+
+
+    @Override
+    public boolean tryLock(long timeoutSec) {
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        Boolean flag = redisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);
+    }
+
+    @Override
+    public void unlock() {
+        // 线程标识
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        String redisThreadId = (String) redisTemplate.opsForValue().get("KEY_PREFIX + name");
+        // 标识是否一致
+        if (threadId.equals(redisThreadId)) {
+            redisTemplate.delete(KEY_PREFIX + name);
+        }
+    }
+}
+```
+
+
+**分布式锁的原子性问题**
+
+由于*判断标识*是否一致和*释放锁*是两个操作，可能会在判断标识一致后发生线程阻塞并且阻塞时间过长导致锁超时释放，其他线程就会获取锁成功。而当阻塞完成时的线程会直接去释放锁（之前已经判断过是一致的），此时就会释放其他线程的锁(又发生了误删)，从而可能引发线程安全问题。因此需要一种机制保证这两个Redis操作的原子性 --- *Redis的Lua脚本*
+
+>JVM的垃圾回收机制在FULL GC时会暂时阻塞所有线程‌
+
+阻塞导致误删情况：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251209234746171.png)
+
+逻辑解释：
+- 假设线程1已经获取了锁，在判断标识一致之后，准备释放锁的时候，又出现了阻塞（例如JVM垃圾回收机制）
+- 于是锁的TTL到期了，自动释放了
+- 那么现在线程2趁虚而入，拿到了一把锁
+- 但是线程1的逻辑还没执行完，那么线程1就会执行删除锁的逻辑
+- 但是在阻塞前线程1已经判断了标识一致，所以现在线程1把线程2的锁给删了
+- 那么就相当于判断标识那行代码没有起到作用
+- 这就是删锁时的原子性问题
+
+
+
+#### Redis调用Lua脚本
+
+
+#### Java调用Lua脚本
 
 
 ### Redis优化秒杀

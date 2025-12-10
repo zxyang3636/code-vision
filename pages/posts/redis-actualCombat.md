@@ -2197,14 +2197,513 @@ public class SimpleRedisLock implements ILock {
 
 #### Redis调用Lua脚本
 
+Redis提供了Lua脚本功能，在一个脚本中编写多条Redis命令，确保多条命令执行时的原子性。Lua是一种编
+程语言，它的基本语法大家可以参考网站：https://www.runoob.com/lua/lua-tutorial.html
+
+Redis提供的调用函数，语法如下：
+
+```lua
+# 执行 Redis 命令
+
+# 执行redis命令
+redis.call('命令名称', 'key', '其它参数', ...)
+```
+例如，我们要执行 set name jack，则脚本是这样：
+
+```lua
+# 执行 set name jack
+redis.call('set', 'name', 'jack')
+```
+
+例如，我们要先执行 set name Rose，再执行 get name，则脚本如下：
+```lua
+# 先执行 set name jack
+redis.call('set', 'name', 'jack')
+# 再执行 get name
+local name = redis.call('get', 'name')
+# 返回
+return name
+```
+
+写好脚本以后，需要用Redis命令来调用脚本，调用脚本的常见命令如下：
+```bash
+127.0.0.1:6379> help @scripting
+
+  EVAL script numkeys key [key ...] arg [arg ...]
+  summary: Execute a Lua script server side
+  since: 2.6.0
+```
+例如，我们要执行redis.call('set'，'name'，jack'）这个脚本，语法如下：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251210212522030.png)
+```bash
+127.0.0.1:6379> EVAL "return redis.call('set','name','Jack')" 0
+OK
+127.0.0.1:6379> get name
+"Jack"
+```
+
+如果脚本中的key、Value不想写死，可以作为参数传递。key类型参数会放入KEYS数组，其它参数会放入ARGV数组，在
+脚本中可以从KEYS和ARGV数组获取这些参数：
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251210213306702.png)
+```lua
+127.0.0.1:6379> EVAL "return redis.call('set',KEYS[1],ARGV[1])" 1 name Lucy
+OK
+127.0.0.1:6379> get name
+"Lucy"
+127.0.0.1:6379> 
+```
+
+:::warning
+lua语言中数组角标从1开始
+:::
+
+
+释放锁的业务流程是这样的：
+
+1. 获取锁中的线程标示  
+2. 判断是否与指定的标示（当前线程标示）一致  
+3. 如果一致则释放锁（删除）  
+4. 如果不一致则什么都不做
+
+如果用Lua脚本来表示则是这样的：
+```lua
+-- 获取锁中的线程标示
+local id = redis.call('GET', KEYS[1])
+-- 比较线程标示与锁中的标示是否一致
+if(id == ARGV[1]) then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+```
+
 
 #### Java调用Lua脚本
 
+RedisTemplate调用Lua脚本的API如下：
+
+其中，将KEY类型参数放在了一个List中，通过该List可以知道传入的KEY类型参数的个数，就不用原指令中的numkeys参数了。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251210214932342.png)
+
+**使用步骤：**
+
+先在classpath路径下建一个lua脚本
+```lua [unlock.lua]
+-- 获取锁中的线程标示
+local id = redis.call('GET', KEYS[1])
+-- 比较线程标示与锁中的标示是否一致
+if(id == ARGV[1]) then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+```
+
+使用redisTemplate或stringRedisTemplate调用lua脚本：
+```java [SimpleRedisLock.java]
+package com.hmdp.utils;
+
+import cn.hutool.core.lang.UUID;
+import cn.hutool.core.util.BooleanUtil;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+
+import java.util.Collections;
+import java.util.concurrent.TimeUnit;
+
+
+public class SimpleRedisLock implements ILock {
+
+    private RedisTemplate<String, Object> redisTemplate;
+    private String name;
+
+    private static final String KEY_PREFIX = "lock:";
+    private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
+
+    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+
+    static {
+        UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua")); // 指定classpath文件路径
+        UNLOCK_SCRIPT.setResultType(Long.class);
+    }
+
+    public SimpleRedisLock(RedisTemplate<String, Object> redisTemplate, String name) {
+        this.redisTemplate = redisTemplate;
+        this.name = name;
+    }
+
+
+    @Override
+    public boolean tryLock(long timeoutSec) {
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        Boolean flag = redisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);
+    }
+
+    @Override
+    public void unlock() {
+        // 调用lua脚本
+        redisTemplate.execute(UNLOCK_SCRIPT,
+                Collections.singletonList(KEY_PREFIX + name),
+                ID_PREFIX + Thread.currentThread().getId());
+    }
+
+//    @Override
+//    public void unlock() {
+//        // 线程标识
+//        String threadId = ID_PREFIX + Thread.currentThread().getId();
+//        String redisThreadId = (String) redisTemplate.opsForValue().get("KEY_PREFIX + name");
+//        // 标识是否一致
+//        if (threadId.equals(redisThreadId)) {
+//            redisTemplate.delete(KEY_PREFIX + name);
+//        }
+//    }
+}
+
+```
+
+```java [ILock.java]
+public interface ILock {
+
+    /**
+     *尝试获取锁
+     * @param timeout 锁持有的超时时间，过期后自动释放
+     * @return true代表获取锁成功；false代表获取锁失败
+     */
+    boolean tryLock(long timeout);
+
+    /**
+     * 释放锁
+     */
+    void unlock();
+}
+```
+
+解决了阻塞情况下锁误删情况；
+
+
+
+基于Redis的分布式锁实现思路：
+
+- 利用 `set nx ex` 获取锁，并设置过期时间，保存线程标示  
+- 释放锁时先判断线程标示是否与自己一致，一致则删除锁
+
+特性：
+
+- 利用 `set nx` 满足互斥性  
+- 利用 `set ex` 保证故障时锁依然能释放，避免死锁，提高安全性  
+- 利用 Redis 集群保证高可用和高并发特性
+
+
+### Redisson
+
+**基于setnx实现的分布式锁存在下面的问题：**
+
+
+- 不可重入
+同一个线程无法多次获取同一把锁
+
+可重入锁是指**同一个线程可以多次获取同一把锁**。
+
+比如，我有一个方法a，需要先获取锁，然后执行业务并调用方法b，而方法b里也要获取同一把锁。如果锁是不可重入的，那么在方法a中获取锁后，调用方法b时再次尝试获取这把锁就会失败，此时会等待锁的释放。但由于方法a还未执行完，仍在调用b，所以会出现死锁。因此，在这种场景下，要求锁必须是可重入的。
+
+
+- 不可重试
+获取锁只尝试一次就返回
+false，没有重试机制
+
+我们之前所实现的锁是非阻塞的，如果失败，则立即返回
+
+
+- 超时释放
+锁超时释放虽然可以避免死
+锁，但如果是业务执行耗时
+较长，也会导致锁释放，存
+在安全隐患
+
+如果时间太短，业务还没执行完，锁就释放了，就有可能发生我的业务还在执行，其他线程就获取到锁了；如果设置时间太长，将来如果我这个业务出现故障，那么很长一段时间其他线程都不能获取到锁，都在等待锁超时释放；
+
+
+- 主从一致性
+如果Redis提供了主从集群，主从同步存在延迟，当主宕机时，如果从并同步主中的
+锁数据，则会出现锁实现
+
+在某些情况下，比如现在有一个线程在主节点获取了锁。由于加锁是 set 操作，是一个写操作，这个写操作在主节点完成后，如果还没有同步到从节点，因为存在延迟，主节点突然宕机了。此时会选一个新的从节点作为主节点，而这个从节点因为没有完成同步，所以没有锁的标识。这样其他线程可能会趁机获取到锁，导致出现多个线程持有锁的情况。在极端情况下可能会出现安全问题。当然，这种情况发生的概率很低，因为主从同步的延迟通常非常低，往往在毫秒级别甚至更低。
+
+因此，前面提到的这4个问题，要么发生概率极低，要么并不是所有业务都有这样的需求，有些业务需要，有些业务不需要。
+
+
+---
+
+**Redisson**
+
+Redisson是一个在Redis的基础上实现的Java驻内存数据网格（In-Memory Data Grid）。它不仅提供了一系列的分布式
+的Java常用对象，还提供了许多分布式服务，其中就包含了各种分布式锁的实现。
+
+>是在Redis基础上实现的分布式工具的集合，在分布式系统下用的工具，它都有。（分布式锁就是它的一个子集）
+
+Redis提供了分布式锁的多种多样功能
+1. 可重入锁(Reentrant Lock)
+2. 公平锁(Fair Lock)
+3. 联锁(MultiLock)
+4. 红锁(RedLock)
+5. 读写锁(ReadWriteLock)
+6. 信号量(Semaphore)
+7. 可过期性信号量(PermitExpirableSemaphore)
+8. 闭锁(CountDownLatch)
+
+官网地址：https://redisson.org
+
+GitHub地址：https://github.com/redisson/redisson
+
+
+
+#### Redisson快速入门
+引入依赖
+```xml
+<dependency>
+    <groupId>org.redisson</groupId>
+    <artifactId>redisson</artifactId>
+    <version>3.13.6</version>
+</dependency>
+```
+
+配置Redisson客户端
+```java
+@Configuration
+public class RedisConfig {
+
+    @Bean
+    public RedissonClient redissonClient() {
+        // 配置类
+        Config config = new Config();
+        // 添加 redis 地址，这里添加了单点的地址，也可以使用 config.useClusterServers() 添加集群地址
+        config.useSingleServer().setAddress("redis://192.168.150.101:6379").setPassword("123321");
+        // 创建客户端
+        return Redisson.create(config);
+    }
+}
+```
+
+使用：
+```java
+@Resource
+private RedissonClient redissonClient;
+
+@Test
+void testRedisson() throws InterruptedException {
+    // 获取锁（可重入），指定锁的名称
+    RLock lock = redissonClient.getLock("anyLock");
+    // 尝试获取锁，参数分别是：获取锁的最大等待时间（期间会重试），锁自动释放时间，时间单位
+    boolean isLock = lock.tryLock(1, 10, TimeUnit.SECONDS);
+    // 判断释放获取成功
+    if(isLock){
+        try {
+            System.out.println("执行业务");
+        }finally {
+            // 释放锁
+            lock.unlock();
+        }
+    }
+}
+```
+
+业务改进：
+```java
+private final RedissonClient redissonClient;
+
+    @Override
+    public Result seckillVoucher(Long voucherId) {
+        // 查优惠券
+        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = voucher.getBeginTime();
+        if (beginTime.isAfter(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀尚未开始");
+        }
+        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+            // 未开始
+            return Result.fail("秒杀已经结束");
+        }
+        if (voucher.getStock() < 1) {
+            return Result.fail("库存不足");
+        }
+        Long userId = UserHolder.getUser().getId();
+        // 创建锁对象
+//        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(redisTemplate, "order:" + userId);
+        RLock lock = redissonClient.getLock("order:" + userId);
+        boolean flag = lock.tryLock();  // 立即尝试获取锁，获取不到直接返回 false，且不重试
+        if (!flag) {
+            // 获取锁失败
+            return Result.fail("不允许重复下单");
+        }
+        try {
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            // 释放锁
+            lock.unlock();
+//            simpleRedisLock.unlock();
+        }
+    }
+
+
+    @Transactional(timeout = 5000, rollbackFor = Exception.class)
+    public Result createVoucherOrder(Long voucherId) {
+        Long userId = UserHolder.getUser().getId();
+        // 一人一单
+        Integer count = lambdaQuery()
+                .eq(VoucherOrder::getUserId, userId)
+                .eq(VoucherOrder::getVoucherId, voucherId)
+                .count();
+        if (count > 0) {
+            // 用户至少下过一单
+            return Result.fail("已经购买过了");
+        }
+        // 扣减库存
+        boolean flag = seckillVoucherService.update().setSql("stock = stock - 1")   // set stock = stock - 1
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)  // where id = ? and stock > 0
+                .update();
+        if (!flag) {
+            return Result.fail("库存不足");
+        }
+        // 创建订单
+        long orderId = redisIdWorker.nextId("order");
+        VoucherOrder voucherOrder = VoucherOrder.builder()
+                .id(orderId)
+                .userId(userId)
+                .voucherId(voucherId)
+                .build();
+        save(voucherOrder);
+        // 返回订单id
+        return Result.ok(orderId);
+
+    }
+```
+
+#### Redisson可重入锁原理
+
+```java
+// 创建锁对象
+RLock lock = redissonClient.getLock("lock");
+
+@Test
+void method1() {
+    boolean isLock = lock.tryLock();
+    if(!isLock){
+        log.error("获取锁失败, 1");
+        return;
+    }
+    try {
+        log.info("获取锁成功, 1");
+        method2();
+    } finally {
+        log.info("释放锁, 1");
+        lock.unlock();
+    }
+}
+
+void method2(){
+    boolean isLock = lock.tryLock();
+    if(!isLock){
+        log.error("获取锁失败, 2");
+        return;
+    }
+    try {
+        log.info("获取锁成功, 2");
+    } finally {
+        log.info("释放锁, 2");
+        lock.unlock();
+    }
+}
+```
+1. method1() 成功加锁（第一次 tryLock() 返回 true）。
+2. method1() 调用 method2()，此时当前线程已持有锁。
+3. method2() 再次调用 lock.tryLock()：
+    - 由于是同一个线程，Redisson 允许重入，tryLock() 返回 true。
+    - 锁的内部重入计数（hold count）变为 2。
+4. method2() 执行完，调用 lock.unlock()：
+    - 重入计数减为 1。
+    - 锁并未真正释放（因为计数 > 0）。
+5. 回到 method1() 的 finally 块，再次 lock.unlock()：
+    - 重入计数减为 0，锁真正释放。
+
+如果是不可重入的：method1在方法内部调用method2(method1和method2出于同一个线程)，那么method1已经拿到一把锁了，想进入method2中拿另外一把锁，必然是拿不到的，于是就出现了死锁;
+
+
+**Redisson可重入锁原理**
+
+利用Hash结构记录线程ID和重入次数‌，使用计数器维护锁状态
+
+当同一个线程第一次获取锁时，Redis会记录下这个线程的ID，并将锁的持有次数设置为1。如果这个线程再次请求锁（即可重入操作），Redisson会检测到当前持有锁的线程ID与当前线程相同，于是不会重新设置锁，而是增加计数器，表示这个线程再次持有了锁‌。
+
+并且同一线程可以多次获取同一个锁，且只有当所有锁释放操作都完成后，锁才会真正释放。Redisson通过维护一个计数器来实现这一特性。每次释放锁时，Redisson会减少计数器，只有当计数器减为0时，锁才会真正释放‌。
+
+步骤：
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251210233216892.png)
+
+
+获取锁的Lua脚本
+```lua
+local key = KEYS[1];  -- 锁的key
+local threadId = ARGV[1];  -- 线程的唯一标识
+local releaseTime = ARGV[2]; -- 锁的自动释放时间
+
+-- 判断锁是否存在
+if (redis.call('exists',key) == 0) then
+    -- 锁不存在，获取锁
+    redis.call('hset', key, threadId, 1);
+    --设置有效期
+    redis.call('expire', key, releaseTime);
+    -- 返回结果
+    return 1;
+end
+
+--锁已存在，判断锁是否是自己的
+if (redis.call('hexists',key,threadId) == 1) then
+    --锁是自己的，重置过期时间，计数器加一
+    redis.call('hincrby',key,threadId,1);
+    redis.call('expire',key,releaseTime);
+    return 1;
+end
+return 0; -- 锁不是自己的，获取锁失败
+```
+
+释放锁的Lua脚本
+```lua
+local key = KEYS[1];  -- 锁的key
+local threadId = ARGV[1];  -- 线程的唯一标识
+local releaseTime = ARGV[2]; -- 锁的自动释放时间
+
+-- 判断锁是否是自己的
+if (redis.call('hexists',key,threadId) == 0) then
+    --锁不是自己的，直接返回
+    return nil;
+end
+-- 是自己的锁，则重入次数减一
+local count = redis.call('hincrby',key,threadId,-1);
+
+-- 判断计数器是否已减为0
+if (count > 0) then
+    -- 计数器不为0，不能释放锁，重置锁有效期后返回
+    redis.call('expire',key,releaseTime);
+    return nil;
+else
+    -- 计数器减为零，释放锁
+    redis.call('del',key);
+    return nil;
+end
+```
+
+
+
+
+
 
 ### Redis优化秒杀
-
-
-
 
 
 

@@ -2753,6 +2753,146 @@ Redisson 分布式锁原理：
 
 总的来说解决了不可重入、不可重试、超时释放的问题
 
+---
+
+**Redisson锁的MultiLock原理**
+
+为了提高Redis的可用性，我们会搭建集群或者主从，以主从为例，主节点负责增删改，从节点负责读，主机会将数据同步给从机，但在主从同步完成之前，如果主节点宕机，Redis的哨兵机制会选择一个新的从节点作为主节点。然而，这个新的主节点上并没有之前的锁信息，导致锁失效。这样，当新的线程发来请求时，又可以获取到锁，从而出现两个线程并发访问安全问题。
+
+为了解决这个问题，Redisson提出了‌MultiLock‌锁（联锁）。MultiLock锁不使用主从关系，而是将每个Redis节点都视为独立的节点，都可以进行读写操作。在获取锁时，需要在所有的Redis服务器上都要获取锁，只有所有的服务器都写入成功，才算是加锁成功，假设现在某个节点挂了，那么他去获取锁的时候，只要有一个节点拿不到，都不能算是加锁成功。这样，即使某个节点宕机 ，由于其他节点上仍然保留有锁的标识，因此新的线程无法在所有节点上都获取到锁，从而保证了锁的一致性和安全性‌。
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20251218000658790.png)
+
+**测试**
+
+我们先使用虚拟机额外搭建两个Redis节点
+```java
+@Configuration
+public class RedissonConfig {
+    @Bean
+    public RedissonClient redissonClient() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://192.168.137.130:6379")
+                .setPassword("root");
+        return Redisson.create(config);
+    }
+
+    @Bean
+    public RedissonClient redissonClient2() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://92.168.137.131:6380")
+                .setPassword("root");
+        return Redisson.create(config);
+    }
+
+    @Bean
+    public RedissonClient redissonClient3() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://92.168.137.132:6381")
+                .setPassword("root");
+        return Redisson.create(config);
+    }
+}
+```
+使用联锁，我们首先要注入三个RedissonClient对象
+```java
+@Resource
+private RedissonClient redissonClient;
+@Resource
+private RedissonClient redissonClient2;
+@Resource
+private RedissonClient redissonClient3;
+
+private RLock lock;
+
+@BeforeEach
+void setUp() {
+    RLock lock1 = redissonClient.getLock("lock");
+    RLock lock2 = redissonClient2.getLock("lock");
+    RLock lock3 = redissonClient3.getLock("lock");
+    lock = redissonClient.getMultiLock(lock1, lock2, lock3);    // 用哪一client调用都没有问题，都是一样的；并且这里的每一个节点的锁都是可重入锁
+}
+
+@Test
+void method1() {
+    boolean success = lock.tryLock();
+    redissonClient.getMultiLock();
+    if (!success) {
+        log.error("获取锁失败，1");
+        return;
+    }
+    try {
+        log.info("获取锁成功");
+        method2();
+    } finally {
+        log.info("释放锁，1");
+        lock.unlock();
+    }
+}
+
+void method2() {
+    RLock lock = redissonClient.getLock("lock");
+    boolean success = lock.tryLock();
+    if (!success) {
+        log.error("获取锁失败，2");
+        return;
+    }
+    try {
+        log.info("获取锁成功，2");
+    } finally {
+        log.info("释放锁，2");
+        lock.unlock();
+    }
+}
+```
+
+所谓的联锁，就是多个独立的锁，而每一个独立的锁，跟之前的原理是一样的；
+
+
+**总结**
+
+1）不可重入Redis分布式锁：
+
+- 原理：利用 `setnx` 的互斥性；利用 `ex` 避免死锁；释放锁时判断线程标示  
+- 缺陷：不可重入、无法重试、锁超时失效
+
+2）可重入的Redis分布式锁：
+
+- 原理：利用 hash 结构，记录线程标示和重入次数；利用 `watchDog` 延续锁时间；利用信号量和消息订阅控制锁重试等待
+- 缺陷：redis宕机引起锁失效问题、主从延迟或宕机导致节点未同步锁问题
+
+3）Redisson的multiLock：
+
+- 原理：多个独立的Redis节点，必须在所有节点都获取重入锁，才算获取锁成功  
+- 缺陷：运维成本高、实现复杂
+
+
+:::tip
+`EX` 如何避免死锁？
+
+- `EX` 是 Redis `SET` 命令的一个选项，用于 **设置 key 的过期时间（单位：秒）**。  
+即使持有锁的客户端异常退出、或忘记调用 unlock()、业务异常无法释放锁，Redis 也会在设定的 EX 时间后 自动删除该锁 key，从而释放锁，让其他客户端有机会重新获取。利用 EX 设置锁的自动过期时间，相当于给分布式锁加了一个“安全熔断机制”——即使程序出错，锁也能在有限时间内自动释放，从而有效避免死锁。
+
+
+
+*利用信号量控制锁重试等待*
+
+在分布式系统中，当多个客户端竞争同一把锁时，**未抢到锁的客户端通常需要“重试”**（即过一会儿再尝试获取）。但如果每个客户端都无限制地、高频地轮询重试，会导致：
+
+- Redis 服务器压力剧增（大量无效请求）  
+- 客户端 CPU 空转  
+
+1. **信号量作为协调器**  
+   - 当客户端首次 `tryLock()` 失败时，**不立即返回失败**，而是向 Redis 注册一个“等待许可”请求。  
+   - Redisson 在 Redis 中维护一个与锁关联的 **信号量**，记录有多少客户端在排队等待。
+2. **释放锁时唤醒等待者**  
+   - 当持有锁的客户端调用 `unlock()` 时，除了删除锁 key，还会 **释放一个信号量许可**（`release()`）。  
+   - 此操作会 **通知（或唤醒）一个正在等待的客户端**，让它立即重试获取锁，而不是被动轮询。
+3. **支持超时与公平性**  
+   - 客户端可设置最大等待时间（如 `tryLock(10, 30, TimeUnit.SECONDS)`：最多等 10 秒，持锁 30 秒）。  
+   - Redisson 默认按 **FIFO（先到先得）** 唤醒等待者，保证公平性。
+:::
+
 
 
 ### Redis优化秒杀

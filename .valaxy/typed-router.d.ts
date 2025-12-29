@@ -177,6 +177,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/posts/langChain4j': RouteRecordInfo<
+      '/posts/langChain4j',
+      '/posts/langChain4j',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/posts/mysql-backup': RouteRecordInfo<
       '/posts/mysql-backup',
       '/posts/mysql-backup',
@@ -459,6 +466,12 @@ declare module 'vue-router/auto-routes' {
     'pages/posts/javase-mianshi.md': {
       routes:
         | '/posts/javase-mianshi'
+      views:
+        | never
+    }
+    'pages/posts/langChain4j.md': {
+      routes:
+        | '/posts/langChain4j'
       views:
         | never
     }

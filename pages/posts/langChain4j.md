@@ -1207,4 +1207,111 @@ public class ChatController {
 
 
 
+### 消息注解
+
+**SystemMessage**
+
+SystemMessage，顾名思义，它是用于设置系统消息的，你可以直接在接口的方法上添加这个注解，在注解中书写系统消息即可。当然了, 如果我们的系统消息很长, 直接在代码中写不方便，它还提供了另外一种使用方式，通过fromResource属性，指定一个外部的文件。这样我们就可以把系统消息一次性的写入到外部文件中，管理起来也比较方便。
+
+将系统提示词粘贴到resources目录下
+```txt
+你是code视界提供的专业的AI志愿填报顾问，可以给用户提供如下功能：
+1.查询目标院校的院校简介
+2.查询目标院校的录取规则
+3.查询目标院校的奖学金设置状况
+4.查询目标院校的食宿条件
+5.查询目标院校招生联系方式
+6.查询目标院2024年不同专业录取情况
+7.查询热门专业
+8.查询天坑专业
+9.根据学生提供的分数和不同学校以及学校历年录取分数，推荐合适的学校和专业，每次根据匹配度，按照冲、稳、保的逻辑，罗列出合适的学校以及专业，给用户呈现时需要呈现学校名称、专业名称、历年录取分数以及专业热度
+10.高考志愿填报一对一沟通预约服务
+11.查询志愿指导服务预约详情
+说明：
+    1.每次回答完用户问题，最后都加上一句话：<br/>志愿填报需要考虑的因素有很多，如果要得到专业的志愿填报指导，建议您预约一个一对一的指导服务，是否需要预约？
+    2.下预约单需要用户提供生姓名、考生性别、考生电话、考生预约沟通时间(日期+时间)、考生所在省份、考生预估分数，当用户表达出需要预约志愿指导服务的意愿后，你不能自己模拟这些数据下预约单，而是需要以委婉的方式引导用户提供考生姓名、考生性别、考生电话、考生预约沟通时间(日期+时间)、考生所在省份、考生预估分数,这些信息必须是用户全部提供，不能有模拟数据，否则不要下预约单
+    3.一旦预约成功，最后不要再跟上面第1条指定的话术，而是更改为：恭喜您，一对一志愿指导服务已经预约成功，我们会准时联系您，请注意接听电话！
+    4.给用户的回复中，不要提及类似"根据您提供的信息/根据资料中的信息"这样的话术
+
+你是传智教育提供的智能志愿填报咨询师，只回答有关高考志愿填报的问题，其它问题不予回答。
+
+```
+
+
+
+```java
+@AiService(
+        wiringMode = AiServiceWiringMode.EXPLICIT,
+        chatModel = "openAiChatModel",
+        streamingChatModel = "openAiStreamingChatModel"
+)
+public interface ConsultantService {
+    //用于聊天的方法,message为用户输入的内容
+//    @SystemMessage("你是张紫阳助手小阿巴")
+    @SystemMessage(fromResource = "system.txt")
+    Flux<String> chat(String message);
+}
+```
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20260106233258094.png)
+
+
+
+**UserMessage**
+
+ 假设现在没有SystemMessage，那么我们可以借助于UserMessage注解完成同样的效果，我们可以在用户消息前后，拼接提前预设的内容下面给出一个使用示例：
+```java
+@AiService(
+        wiringMode = AiServiceWiringMode.EXPLICIT,
+        chatModel = "openAiChatModel",
+        streamingChatModel = "openAiStreamingChatModel"
+)
+public interface ConsultantService {
+
+    @UserMessage("你是张紫阳助手小阿巴,{{it}}")
+    Flux<String> chat(String message);
+}
+```
+
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20260106233756667.png)
+
+实际请求
+```json
+- method: POST
+- url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+- headers: [Authorization: Beare...c4], [User-Agent: langchain4j-openai], [Content-Type: application/json]
+- body: {
+  "model" : "qwen-flash",
+  "messages" : [ {
+    "role" : "user",
+    "content" : "你是张紫阳助手小阿巴,你是谁？"
+  } ],
+  "stream" : true,
+  "stream_options" : {
+    "include_usage" : true
+  }
+}
+```
+
+"你是谁？" 被替换了
+
+
+上面示例中的参数message是用户传递的消息，我们在使用UserMessage注解的时候，可以通过{{it}}的方式, 动态的获取到用户传递的消息，然后再往它的前后拼接上预设的内容即可，想拼什么拼什么。
+这里有一点需要说明，这个花括号内的it是固定的，不能随便写。假设你不想使用it这个名字，langchain4j提供了一个V注解，用于解决这个问题。我们在参数前面通过V注解给这个参数起一个名字，然后在花括号内写上同样的名字就能获取到了，下面是一个使用示例：
+
+```java
+import dev.langchain4j.service.V;
+
+
+@AiService(
+        wiringMode = AiServiceWiringMode.EXPLICIT,
+        chatModel = "openAiChatModel",
+        streamingChatModel = "openAiStreamingChatModel"
+)
+public interface ConsultantService {
+
+    @UserMessage("你是张紫阳助手小阿巴,{{msg}}")
+    Flux<String> chat(@V("msg") String message);
+}
+```
 

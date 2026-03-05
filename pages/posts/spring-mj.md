@@ -287,10 +287,17 @@ globalsession
 
 ## @PostConstruct使用注意事项
 
+发生在依赖注入之后，可以在 `@PostConstruct` 方法中安全地使用所有已注入的 `@Autowired` 成员变量
+
 - `@PostConstruct` 注解的方法必须是 public 的，并且不能有参数。
 - 如果一个类中定义了多个 `@PostConstruct` 注解的方法，这些方法将按照它们在类中定义的顺序执行。
 - `@PostConstruct` 注解的方法可以抛出异常，如果抛出异常，容器可能会将这个 Bean 标记为销毁状态。
 
+:::info
+场景 A：加载全局缓存，从数据库读取字典表、配置项加载到内存（Map/Redis），避免每次请求都查库。
+
+场景 B：校验关键配置，检查某些必须的配置文件或环境变量是否存在
+:::
 
 ## Spring bean 的生命周期？
 

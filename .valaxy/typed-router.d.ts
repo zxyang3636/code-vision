@@ -268,6 +268,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/posts/redis-notes': RouteRecordInfo<
+      '/posts/redis-notes',
+      '/posts/redis-notes',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/posts/spring-cloud': RouteRecordInfo<
       '/posts/spring-cloud',
       '/posts/spring-cloud',
@@ -544,6 +551,12 @@ declare module 'vue-router/auto-routes' {
     'pages/posts/redis-basic.md': {
       routes:
         | '/posts/redis-basic'
+      views:
+        | never
+    }
+    'pages/posts/redis-notes.md': {
+      routes:
+        | '/posts/redis-notes'
       views:
         | never
     }

@@ -1,5 +1,5 @@
 ---
-title: Java SE面经
+title: Java SE Interview
 date: 2025-03-07
 updated: 2025-03-07
 categories: 面试指北
@@ -199,6 +199,38 @@ clone()
 通过反射机制创建
 
 序列化反序列化 将一个对象实例化后，进行序列化，再反序列化，也可以获得一个对象
+
+### Java 集合容器都有哪些？
+![](https://zzyang.oss-cn-hangzhou.aliyuncs.com/img/20260310223633539.png)
+
+```java
+Collection
+├── List（有序、可重复）
+│   ├── ArrayList（基于动态数组，随机访问快，线程不安全）
+│   ├── LinkedList（基于双向链表，插入/删除快，线程不安全）
+│   └── Vector（线程安全的动态数组，性能较低，已基本被 ArrayList + Collections.synchronizedList 替代）
+│       └── Stack（继承自 Vector，LIFO 栈，官方不推荐使用）
+│
+├── Set（无序、元素唯一）
+│   ├── HashSet（基于 HashMap 实现，无序，允许 null）
+│   │   └── LinkedHashSet（维护插入顺序或访问顺序）
+│   └── TreeSet（基于 TreeMap/红黑树，元素自然排序或自定义排序，不允许 null）
+│
+└── Queue（队列，FIFO 或优先级）
+    ├── PriorityQueue（基于堆，按优先级出队，不允许 null）
+    └── Deque（双端队列）
+        ├── ArrayDeque（基于循环数组，高效，推荐替代 Stack）
+        └── LinkedList（也实现了 Deque 接口）
+
+Map（键值对，非 Collection 子接口，但属于集合框架核心）
+├── HashMap（哈希表实现，允许 null 键/值，线程不安全）
+│   └── LinkedHashMap（维护插入顺序或访问顺序）
+├── Hashtable（线程安全，不允许 null，已过时）
+├── TreeMap（基于红黑树，按键排序，不允许 null 键）
+└── ConcurrentHashMap（高并发场景下的线程安全 Map，分段锁 / CAS 优化）
+```
+
+
 
 ### List 与 Set 区别
 

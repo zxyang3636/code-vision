@@ -187,6 +187,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/posts/middleware-interview': RouteRecordInfo<
+      '/posts/middleware-interview',
+      '/posts/middleware-interview',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/posts/mysql-backup': RouteRecordInfo<
       '/posts/mysql-backup',
       '/posts/mysql-backup',
@@ -482,6 +489,12 @@ declare module 'vue-router/auto-routes' {
     'pages/posts/langChain4j.md': {
       routes:
         | '/posts/langChain4j'
+      views:
+        | never
+    }
+    'pages/posts/middleware-interview.md': {
+      routes:
+        | '/posts/middleware-interview'
       views:
         | never
     }

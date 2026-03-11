@@ -97,6 +97,8 @@ MQ （MessageQueue），中文是消息队列，字面来看就是存放消息�
 
 ## 安装部署rabbitmq
 
+**Docker部署**
+
 上传我们的`mq.tar`,rabbitmq的镜像文件
 ```Bash
 docker load -i mq.tar
@@ -129,6 +131,132 @@ docker run \
 我们访问 http://192.168.146.131:15672  即可看到管理控制台。首次访问需要登录，默认的用户名和密码在配置文件中已经指定了。
 
 登录后即可看到管理控制台总览页面;
+
+
+
+>CentOS 7 部署
+
+Erlang和RabbitMQ版本对照：https://www.rabbitmq.com/which-erlang.html
+
+1. 首先将下载好的文件上传到服务器，创建一个文件夹用来存放文件
+```bash
+mkdir -p /usr/rabbitmq
+```
+
+2. 然后切换到`/usr/rabbitmq`目录，解压安装erlang
+```shell
+# 解压
+rpm -Uvh erlang-23.2.7-2.el7.x86_64.rpm
+
+# 安装
+yum install -y erlang
+
+```
+安装完成后输入如下指令查看版本号
+```shell
+erl -v
+```
+
+3. 安装RabbitMQ-在RabiitMQ安装过程中需要依赖socat插件，首先安装该插件
+```
+yum install -y socat
+
+```
+
+然后解压安装RabbitMQ的安装包
+
+```shell
+# 解压
+rpm -Uvh rabbitmq-server-3.8.14-1.el7.noarch.rpm
+
+# 安装
+yum install -y rabbitmq-server
+
+```
+
+启动RabbitMQ服务
+```shell
+# 启动rabbitmq
+systemctl start rabbitmq-server
+
+# 查看rabbitmq状态
+systemctl status rabbitmq-server
+
+```
+显示active则表示服务安装并启动成功
+
+其他命令：
+```shell
+# 设置rabbitmq服务开机自启动
+systemctl enable rabbitmq-server
+
+# 关闭rabbitmq服务
+systemctl stop rabbitmq-server
+
+# 重启rabbitmq服务
+systemctl restart rabbitmq-server
+
+```
+
+
+安装启动RabbitMQ Web管理界面,默认情况下，rabbitmq没有安装web端的客户端软件，需要安装才可以生效
+
+```shell
+# 打开RabbitMQWeb管理界面插件
+rabbitmq-plugins enable rabbitmq_management
+
+```
+
+添加远程用户
+```shell
+# 添加用户
+rabbitmqctl add_user 用户名 密码
+
+# 设置用户角色,分配操作权限
+rabbitmqctl set_user_tags 用户名 角色
+
+# 为用户添加资源权限(授予访问虚拟机根节点的所有权限)
+rabbitmqctl set_permissions -p / 用户名 ".*" ".*" ".*"
+
+```
+创建完成后，访问`服务器公网ip:15672`进行登录，然后便可进入到后台
+
+命令示例：
+```shell
+rabbitmqctl add_user root '1qaz!QAZ'
+
+rabbitmqctl set_user_tags root administrator
+
+rabbitmqctl set_permissions -p / root ".*" ".*" ".*"
+```
+
+启用延迟插件
+```shell
+[root@iZgc7j16wv0j7v97crrcpgZ rabbitmq]# ls
+erlang-23.3.4.11-1.el7.x86_64.rpm            rabbitmq-server-3.8.9-1.el7.noarch.rpm
+rabbitmq_delayed_message_exchange-3.10.0.ez  socat-1.7.3.2-2.el7.x86_64.rpm
+[root@iZgc7j16wv0j7v97crrcpgZ rabbitmq]# find / -name "plugins" -type d 2>/dev/null | grep rabbitmq
+/usr/lib/rabbitmq/lib/rabbitmq_server-3.8.9/plugins
+[root@iZgc7j16wv0j7v97crrcpgZ rabbitmq]#
+
+# 1. 复制插件到正确目录
+cp rabbitmq_delayed_message_exchange-3.10.0.ez /usr/lib/rabbitmq/lib/rabbitmq_server-3.8.9/plugins/
+
+# 2. 验证复制成功
+ls -la /usr/lib/rabbitmq/lib/rabbitmq_server-3.8.9/plugins/ | grep delayed
+
+# 3. 启用插件
+rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+
+# 4. 重启 RabbitMQ
+systemctl restart rabbitmq-server
+
+# 5. 查看插件状态
+rabbitmq-plugins list | grep delayed
+```
+
+
+
 
 ---
 

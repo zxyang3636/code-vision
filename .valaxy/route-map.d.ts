@@ -257,6 +257,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/posts/ops-interview': RouteRecordInfo<
+      '/posts/ops-interview',
+      '/posts/ops-interview',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/posts/rabbitmq-a': RouteRecordInfo<
       '/posts/rabbitmq-a',
       '/posts/rabbitmq-a',
@@ -549,6 +556,12 @@ declare module 'vue-router/auto-routes' {
     'pages/posts/mysql-Transaction.md': {
       routes:
         | '/posts/mysql-Transaction'
+      views:
+        | never
+    }
+    'pages/posts/ops-interview.md': {
+      routes:
+        | '/posts/ops-interview'
       views:
         | never
     }
